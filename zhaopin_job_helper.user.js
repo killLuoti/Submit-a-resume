@@ -1,19 +1,19 @@
 // ==UserScript==
-// @name         智联招聘 - 智能岗位匹配助手 v2.1
+// @name         智联招聘/Boss直聘 - 智能自动投递助手 v3.0
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  岗位匹配度分析 + 一键投递 + 批量投递 + 详情页自动投递 | 罗启盛定制版
+// @version      3.0
+// @description  自动投递智联招聘+Boss直聘，技能匹配度分析，AI辅助筛选，智能过滤不适合岗位
 // @author       罗启盛求职助手
 // @match        https://www.zhaopin.com/*
 // @match        https://sou.zhaopin.com/*
 // @match        https://jobs.zhaopin.com/*
-// @match        https://fe-api.zhaopin.com/*
+// @match        https://www.zhipin.com/*
 // @icon         https://www.zhaopin.com/favicon.ico
 // @grant        GM_addStyle
 // @grant        GM_notification
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @grant        GM_openInTab
+// @grant        GM_xmlhttpRequest
 // @license      MIT
 // ==/UserScript==
 
@@ -21,715 +21,743 @@
     'use strict';
 
     // ============================================================
-    // 1. 你的个人技能库（可自由修改）
+    // 配置区 - 根据你的简历修改
     // ============================================================
-    const MY_SKILLS = {
-        '桌面运维': { weight: 10, category: 'core' },
-        'IT支持': { weight: 10, category: 'core' },
-        '网络运维': { weight: 9, category: 'core' },
-        '技术支持': { weight: 9, category: 'core' },
-        '故障排除': { weight: 8, category: 'core' },
-        '系统维护': { weight: 8, category: 'core' },
-        'Python': { weight: 8, category: 'dev' },
-        '爬虫': { weight: 7, category: 'dev' },
-        'C#': { weight: 7, category: 'dev' },
-        'Java': { weight: 6, category: 'dev' },
-        'Android': { weight: 5, category: 'dev' },
-        'H5': { weight: 5, category: 'dev' },
-        'CSS': { weight: 5, category: 'dev' },
-        '前端': { weight: 5, category: 'dev' },
-        'MySQL': { weight: 7, category: 'db' },
-        'SQL Server': { weight: 6, category: 'db' },
-        'SQL': { weight: 6, category: 'db' },
-        '数据库': { weight: 6, category: 'db' },
-        '物联网': { weight: 9, category: 'iot' },
-        '单片机': { weight: 8, category: 'iot' },
-        'STM32': { weight: 8, category: 'iot' },
-        '51单片机': { weight: 7, category: 'iot' },
-        '组网': { weight: 7, category: 'iot' },
-        '传感器': { weight: 7, category: 'iot' },
-        '智能硬件': { weight: 7, category: 'iot' },
-        'Cisco': { weight: 7, category: 'network' },
-        '交换机': { weight: 7, category: 'network' },
-        'VLAN': { weight: 7, category: 'network' },
-        'ACL': { weight: 6, category: 'network' },
-        'NAT': { weight: 6, category: 'network' },
-        '网络调试': { weight: 7, category: 'network' },
-        '白盒测试': { weight: 6, category: 'test' },
-        '自动化测试': { weight: 6, category: 'test' },
-        '电工': { weight: 5, category: 'cert' },
-        '物联网安装调试员': { weight: 8, category: 'cert' },
-    };
-
-    const PREFERENCES = {
-        expectedSalary: [7000, 10000],
+    const CONFIG = {
+        // 求职偏好
         city: '佛山',
-        jobTypes: ['IT技术支持', '运维工程师', '技术支持', '网络运维', '物联网'],
-    };
+        jobKeywords: ['IT技术支持', '运维工程师', '技术支持', '网络运维', '物联网', '桌面运维'],
+        expectedSalary: [7000, 10000],
 
-    const APPLY_CONFIG = {
-        batchInterval: 3000,        // 批量投递间隔(ms)
-        maxBatchPerRound: 20,        // 每轮最大数
-        retryTimes: 3,               // 详情页自动投递重试次数
-        retryDelay: 1000,            // 重试间隔(ms)
+        // 投递设置
+        deliverCount: 50,           // 本轮投递目标数
+        batchInterval: 3000,        // 每次投递间隔(ms)
+        autoNextPage: true,         // 投完一页自动翻页
+
+        // 技能库（用于匹配度评分）
+        skills: {
+            '桌面运维': 10, 'IT支持': 10, '网络运维': 9, '技术支持': 9,
+            '故障排除': 8, '系统维护': 8, 'Python': 8, '爬虫': 7,
+            'C#': 7, 'Java': 6, 'MySQL': 7, 'SQL Server': 6,
+            '物联网': 9, '单片机': 8, 'STM32': 8, '组网': 7,
+            '传感器': 7, 'Cisco': 7, '交换机': 7, 'VLAN': 7,
+            '网络调试': 7, '白盒测试': 6, '电工': 5,
+            '物联网安装调试员': 8,
+        },
+
+        // 已投递记录开关
+        saveApplied: true,
     };
 
     // ============================================================
-    // 2. 样式
+    // 样式
     // ============================================================
     GM_addStyle(`
-        .zpm-match-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:bold; margin-left:8px; vertical-align:middle; }
-        .zpm-match-high { background:#52c41a; color:#fff; }
-        .zpm-match-medium { background:#faad14; color:#fff; }
-        .zpm-match-low { background:#ff4d4f; color:#fff; }
-        .zpm-skill-tags { margin:4px 0; display:flex; flex-wrap:wrap; gap:4px; }
-        .zpm-skill-tag { padding:1px 6px; border-radius:4px; font-size:11px; border:1px solid #1890ff; color:#1890ff; background:#e6f7ff; }
-        .zpm-skill-tag.matched { background:#52c41a; color:#fff; border-color:#52c41a; }
-        #zpm-panel { position:fixed; top:80px; right:20px; width:300px; background:#fff; border:1px solid #d9d9d9; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.15); z-index:999999; font-size:13px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-        #zpm-panel .zpm-header { background:linear-gradient(135deg,#1890ff,#096dd9); color:#fff; padding:12px 16px; border-radius:12px 12px 0 0; font-weight:bold; cursor:move; display:flex; justify-content:space-between; align-items:center; }
-        #zpm-panel .zpm-header .zpm-close { cursor:pointer; font-size:18px; opacity:0.8; }
-        #zpm-panel .zpm-header .zpm-close:hover { opacity:1; }
-        #zpm-panel .zpm-body { padding:12px 16px; max-height:500px; overflow-y:auto; }
-        #zpm-panel .zpm-stat { display:flex; justify-content:space-between; margin-bottom:8px; }
-        #zpm-panel .zpm-stat-item { text-align:center; flex:1; }
-        #zpm-panel .zpm-stat-num { font-size:22px; font-weight:bold; color:#1890ff; }
-        #zpm-panel .zpm-stat-label { font-size:11px; color:#666; }
-        #zpm-panel .zpm-filter-group { margin:8px 0; }
-        #zpm-panel .zpm-filter-btn { padding:4px 12px; border:1px solid #d9d9d9; border-radius:14px; background:#fff; cursor:pointer; font-size:12px; margin:2px; transition:all .2s; }
-        #zpm-panel .zpm-filter-btn.active { background:#1890ff; color:#fff; border-color:#1890ff; }
-        #zpm-panel .zpm-filter-btn:hover { border-color:#1890ff; }
-        #zpm-panel .zpm-footer { padding:8px 16px; border-top:1px solid #f0f0f0; font-size:11px; color:#999; text-align:center; }
-        .zpm-hidden-job { display:none !important; }
-        .zpm-job-matched { outline:2px solid #52c41a; outline-offset:2px; background:#f6ffed !important; }
-        .zpm-salary-badge { display:inline-block; padding:1px 6px; border-radius:4px; font-size:12px; font-weight:bold; margin-left:4px; }
-        .zpm-salary-good { background:#f6ffed; color:#52c41a; border:1px solid #52c41a; }
-        .zpm-salary-low { background:#fff7e6; color:#fa8c16; border:1px solid #fa8c16; }
-
-        /* ===== 投递按钮 ===== */
-        .zpm-btn-apply {
-            display:inline-flex; align-items:center; gap:4px;
-            padding:5px 14px; background:linear-gradient(135deg,#ff6a00,#ee0979);
-            color:#fff !important; border:none; border-radius:6px;
-            cursor:pointer; font-size:12px; font-weight:bold;
-            transition:all .2s; text-decoration:none !important; margin:4px 4px 4px 0;
+        #zpm-v3-panel {
+            position: fixed; top: 80px; right: 20px; width: 320px;
+            background: #fff; border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 999999;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 13px; overflow: hidden;
+            border: 1px solid #e8e8e8;
         }
-        .zpm-btn-apply:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(238,9,121,.3); }
-        .zpm-btn-apply.applied { background:#999; cursor:default; transform:none; box-shadow:none; }
-
-        .zpm-checkbox { width:18px; height:18px; cursor:pointer; margin-right:6px; vertical-align:middle; accent-color:#1890ff; }
-
-        /* ===== 底部批量栏 ===== */
-        #zpm-batch-bar {
-            position:fixed; bottom:0; left:0; right:0;
-            background:#fff; border-top:2px solid #1890ff;
-            padding:10px 20px; box-shadow:0 -4px 20px rgba(0,0,0,.1);
-            z-index:999998; display:none;
-            align-items:center; justify-content:space-between; font-size:13px;
+        #zpm-v3-panel .header {
+            background: linear-gradient(135deg, #165DFF, #0F48D1);
+            color: #fff; padding: 14px 16px; cursor: move;
+            display: flex; justify-content: space-between; align-items: center;
+            user-select: none;
         }
-        #zpm-batch-bar .zpm-batch-info strong { color:#1890ff; }
-        #zpm-batch-bar .zpm-batch-actions { display:flex; gap:8px; }
-        .zpm-batch-btn { padding:8px 20px; border:none; border-radius:6px; cursor:pointer; font-size:13px; font-weight:bold; transition:all .2s; }
-        .zpm-batch-btn-primary { background:linear-gradient(135deg,#ff6a00,#ee0979); color:#fff; }
-        .zpm-batch-btn-primary:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(238,9,121,.3); }
-        .zpm-batch-btn-secondary { background:#f5f5f5; color:#333; border:1px solid #d9d9d9; }
+        #zpm-v3-panel .header h3 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+        #zpm-v3-panel .header .close-btn { cursor: pointer; opacity: 0.7; font-size: 18px; }
+        #zpm-v3-panel .header .close-btn:hover { opacity: 1; }
+        #zpm-v3-panel .body { padding: 14px 16px; max-height: 520px; overflow-y: auto; }
 
-        /* ===== 进度弹窗 ===== */
-        #zpm-progress-overlay {
-            position:fixed; top:0; left:0; right:0; bottom:0;
-            background:rgba(0,0,0,.5); z-index:9999999;
-            display:none; align-items:center; justify-content:center;
+        /* 状态卡片 */
+        .zpm-status-card {
+            background: #f8f9ff; border-radius: 10px; padding: 14px; margin-bottom: 12px;
+            border: 1px solid #e8f0ff; position: relative;
         }
-        #zpm-progress-box { background:#fff; border-radius:16px; padding:30px 40px; min-width:360px; text-align:center; box-shadow:0 8px 40px rgba(0,0,0,.2); }
-        #zpm-progress-box h3 { margin:0 0 16px; font-size:18px; }
-        #zpm-progress-bar-bg { height:8px; background:#f0f0f0; border-radius:4px; overflow:hidden; margin:12px 0; }
-        #zpm-progress-bar-fill { height:100%; width:0%; background:linear-gradient(90deg,#1890ff,#52c41a); border-radius:4px; transition:width .3s; }
-        #zpm-progress-text { font-size:14px; color:#666; margin:8px 0; }
-        #zpm-progress-close { margin-top:16px; padding:8px 24px; border:1px solid #d9d9d9; border-radius:6px; background:#fff; cursor:pointer; display:none; }
+        .zpm-status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .zpm-status-item { display: flex; flex-direction: column; gap: 2px; }
+        .zpm-status-label { font-size: 12px; color: #666; }
+        .zpm-status-value { font-size: 20px; font-weight: 700; color: #333; }
+        .zpm-status-value.running { color: #165DFF; }
+        .zpm-status-value.stopped { color: #999; }
+        .zpm-status-value.done { color: #52c41a; }
 
-        /* ===== 详情页浮动投递按钮 ===== */
-        #zpm-detail-float-btn {
-            position:fixed; bottom:30px; right:30px;
-            padding:14px 32px; background:linear-gradient(135deg,#ff6a00,#ee0979);
-            color:#fff; border:none; border-radius:50px;
-            font-size:16px; font-weight:bold; cursor:pointer;
-            box-shadow:0 6px 24px rgba(238,9,121,.4); z-index:99999;
-            display:flex; align-items:center; gap:8px;
-            animation:zpm-pulse 2s infinite;
+        /* 筛选按钮 */
+        .zpm-filter-group { display: flex; gap: 4px; margin: 8px 0; flex-wrap: wrap; }
+        .zpm-filter-btn {
+            padding: 4px 12px; border: 1px solid #d9d9d9; border-radius: 14px;
+            background: #fff; cursor: pointer; font-size: 12px; transition: all 0.2s;
         }
-        #zpm-detail-float-btn:hover { transform:translateY(-2px); box-shadow:0 8px 30px rgba(238,9,121,.5); }
-        #zpm-detail-float-btn.applied { background:#999; animation:none; cursor:default; }
-        @keyframes zpm-pulse { 0%{box-shadow:0 0 0 0 rgba(238,9,121,.4)} 70%{box-shadow:0 0 0 20px rgba(238,9,121,0)} 100%{box-shadow:0 0 0 0 rgba(238,9,121,0)} }
+        .zpm-filter-btn.active { background: #165DFF; color: #fff; border-color: #165DFF; }
+        .zpm-filter-btn:hover { border-color: #165DFF; }
+
+        /* 启动按钮 */
+        .zpm-toggle-btn {
+            width: 100%; padding: 12px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+            transition: all 0.2s; margin-top: 8px;
+        }
+        .zpm-toggle-btn.start { background: linear-gradient(135deg, #165DFF, #0F48D1); color: #fff; }
+        .zpm-toggle-btn.start:hover { box-shadow: 0 4px 12px rgba(22,93,255,0.3); }
+        .zpm-toggle-btn.stop { background: #ff4d4f; color: #fff; }
+        .zpm-toggle-btn.stop:hover { box-shadow: 0 4px 12px rgba(255,77,79,0.3); }
+
+        /* 投递日志 */
+        .zpm-log-area {
+            margin-top: 8px; max-height: 150px; overflow-y: auto;
+            background: #fafafa; border-radius: 8px; padding: 8px;
+            font-size: 12px; line-height: 1.6;
+        }
+        .zpm-log-item { padding: 2px 0; border-bottom: 1px solid #f0f0f0; }
+        .zpm-log-item:last-child { border-bottom: none; }
+        .zpm-log-success { color: #52c41a; }
+        .zpm-log-skip { color: #faad14; }
+        .zpm-log-error { color: #ff4d4f; }
+        .zpm-log-info { color: #165DFF; }
+
+        /* 进度条 */
+        .zpm-progress-bar {
+            height: 4px; background: #f0f0f0; border-radius: 2px;
+            overflow: hidden; margin: 8px 0;
+        }
+        .zpm-progress-fill {
+            height: 100%; width: 0%;
+            background: linear-gradient(90deg, #165DFF, #52c41a);
+            transition: width 0.3s;
+        }
+
+        /* 匹配度标签 */
+        .zpm-badge {
+            display: inline-block; padding: 1px 6px; border-radius: 8px;
+            font-size: 11px; font-weight: bold; margin-left: 6px;
+        }
+        .zpm-badge-high { background: #52c41a; color: #fff; }
+        .zpm-badge-mid { background: #faad14; color: #fff; }
+        .zpm-badge-low { background: #ff4d4f; color: #fff; }
+
+        .zpm-job-highlight { outline: 2px solid #52c41a; outline-offset: 1px; background: #f6ffed !important; }
+        .zpm-job-hidden { display: none !important; }
+        .zpm-job-applied { opacity: 0.6; }
+
+        .zpm-toast {
+            position: fixed; top: 20%; left: 50%; transform: translateX(-50%);
+            padding: 10px 20px; border-radius: 6px; color: #fff;
+            font-size: 13px; z-index: 9999999; display: none;
+        }
+        .zpm-toast.success { background: #52c41a; }
+        .zpm-toast.error { background: #ff4d4f; }
+        .zpm-toast.info { background: #165DFF; }
+
+        .zpm-footer { text-align: center; font-size: 11px; color: #999; padding: 8px; border-top: 1px solid #f0f0f0; }
     `);
 
     // ============================================================
-    // 3. 工具函数
+    // 工具函数
     // ============================================================
-    function calcMatchScore(text) {
-        if (!text) return { score:0, matched:[], totalWeight:0 };
+    const delay = ms => new Promise(r => setTimeout(r, ms));
+
+    function toast(msg, type='info', duration=2500) {
+        const el = document.getElementById('zpm-toast') || (() => {
+            const t = document.createElement('div');
+            t.id = 'zpm-toast'; t.className = 'zpm-toast';
+            document.body.appendChild(t); return t;
+        })();
+        el.textContent = msg;
+        el.className = `zpm-toast ${type}`;
+        el.style.display = 'block';
+        clearTimeout(el._timer);
+        el._timer = setTimeout(() => el.style.display = 'none', duration);
+    }
+
+    function getApplied() {
+        try { return JSON.parse(GM_getValue('zpm_applied_set', '[]')); } catch { return []; }
+    }
+    function saveApplied(name) {
+        if (!CONFIG.saveApplied) return;
+        const list = getApplied();
+        if (!list.includes(name)) {
+            list.push(name);
+            GM_setValue('zpm_applied_set', JSON.stringify(list));
+        }
+    }
+    function isApplied(name) {
+        return CONFIG.saveApplied && getApplied().includes(name);
+    }
+
+    function calcMatch(text) {
+        if (!text) return { score: 0, matched: [] };
         const lower = text.toLowerCase();
-        let totalWeight = 0, matchedWeight = 0, matched = [];
-        for (const [skill, info] of Object.entries(MY_SKILLS)) {
-            totalWeight += info.weight;
+        let total = 0, matchedW = 0, matched = [];
+        const entries = Object.entries(CONFIG.skills);
+        for (const [skill, weight] of entries) {
+            total += weight;
             const patterns = [skill.toLowerCase(), ...skill.toLowerCase().split(/[\/,，&]/).map(s=>s.trim()).filter(s=>s.length>1)];
-            let isMatched = patterns.some(p => lower.includes(p));
-            if (!isMatched) isMatched = skill.split(/[\s\/,，]/).some(k => k.length > 2 && lower.includes(k.toLowerCase()));
-            if (isMatched) { matchedWeight += info.weight; matched.push(skill); }
+            if (patterns.some(p => lower.includes(p)) || skill.split(/[\s\/,，]/).some(k => k.length > 2 && lower.includes(k.toLowerCase()))) {
+                matchedW += weight;
+                matched.push(skill);
+            }
         }
-        return { score: totalWeight > 0 ? Math.round((matchedWeight / totalWeight) * 100) : 0, matched, totalWeight, matchedWeight };
-    }
-    function parseSalary(text) {
-        if (!text) return null;
-        const clean = text.replace(/[·\s]/g,'').toLowerCase();
-        let m = clean.match(/(\d+\.?\d*)\s*[-~到]\s*(\d+\.?\d*)\s*k/i);
-        if (m) return { low:parseFloat(m[1])*1000, high:parseFloat(m[2])*1000 };
-        m = clean.match(/(\d+)\s*[-~到]\s*(\d+)/);
-        if (m) { const l=parseFloat(m[1]),h=parseFloat(m[2]); return l<1000&&h<1000?{low:l*1000,high:h*1000}:{low:l,high:h}; }
-        m = clean.match(/(\d+\.?\d*)\s*k/i);
-        if (m) { const v=parseFloat(m[1])*1000; return {low:v,high:v}; }
-        return null;
-    }
-    function salaryMatch(salary) {
-        if (!salary) return 'unknown';
-        const [expLow] = PREFERENCES.expectedSalary;
-        return salary.high >= expLow * 0.8 ? 'good' : salary.high >= expLow * 0.5 ? 'low' : 'bad';
-    }
-    function getAppliedJobs() { try { return JSON.parse(GM_getValue('zpm_applied_jobs','[]')); } catch { return []; } }
-    function addAppliedJob(name) { const list=getAppliedJobs(); if(!list.includes(name)){ list.push(name); GM_setValue('zpm_applied_jobs',JSON.stringify(list)); } }
-    function isApplied(name) { return getAppliedJobs().includes(name); }
-
-    // ============================================================
-    // 4. 搜索页处理 - 匹配度 + 投递按钮
-    // ============================================================
-    function processJobCards() {
-        const selectors = [
-            '.joblist-box .jobcard', '.job-list .job-card', '.position-list li',
-            '.contentpile__content .job-card-box', '.job-card-item',
-            '[class*="jobcard"]', '[class*="job-card"]', '[class*="jobItem"]', '.job-item'
-        ];
-        let cards = [];
-        for (const sel of selectors) { cards = document.querySelectorAll(sel); if (cards.length > 0) break; }
-        if (cards.length === 0) {
-            cards = document.querySelectorAll('div[class*="job"]');
-            cards = Array.from(cards).filter(c => { const t=c.textContent||''; return (t.includes('K')||t.includes('k'))&&(t.includes('元')||t.includes('薪'))&&c.children.length>2; });
-        }
-        let stats = { total:0, matched:0, highMatch:0 };
-        cards.forEach(card => {
-            if (card.dataset.zpmDone === '1') return;
-            card.dataset.zpmDone = '1';
-            const text = card.textContent || '';
-            const result = calcMatchScore(text);
-            const salary = parseSalary(text);
-            const sMatch = salaryMatch(salary);
-            const titleEl = card.querySelector('a[class*="title"], a[class*="name"], [class*="title"] a, h3 a, h3, [class*="job-name"]');
-            const salaryEl = card.querySelector('[class*="salary"], [class*="pay"], [class*="money"]');
-            stats.total++;
-
-            // 匹配度标签
-            if (result.score > 0 && titleEl) {
-                let cls = 'zpm-match-low';
-                if (result.score >= 60) { cls='zpm-match-high'; stats.highMatch++; }
-                else if (result.score >= 30) cls='zpm-match-medium';
-                const badge = document.createElement('span');
-                badge.className = `zpm-match-badge ${cls}`;
-                badge.textContent = result.score + '%';
-                badge.title = `匹配技能: ${result.matched.join(', ')}`;
-                titleEl.parentNode.insertBefore(badge, titleEl.nextSibling);
-                if (result.score >= 60) { stats.matched++; card.classList.add('zpm-job-matched'); }
-            }
-            // 薪资标签
-            if (salaryEl && sMatch !== 'unknown') {
-                const b = document.createElement('span');
-                b.className = sMatch==='good'?'zpm-salary-badge zpm-salary-good':'zpm-salary-badge zpm-salary-low';
-                b.textContent = sMatch==='good'?'💰 薪资合适':'⚠ 薪资偏低';
-                salaryEl.parentNode.insertBefore(b, salaryEl.nextSibling);
-            }
-            // 技能标签
-            if (result.matched.length > 0 && titleEl) {
-                const tc = document.createElement('div'); tc.className = 'zpm-skill-tags';
-                result.matched.forEach(s => { const t=document.createElement('span'); t.className='zpm-skill-tag matched'; t.textContent=s; tc.appendChild(t); });
-                const target = card.querySelector('[class*="company"]') || card.querySelector('p') || titleEl.parentNode;
-                if (target && target.parentNode) target.parentNode.insertBefore(tc, target.nextSibling);
-            }
-
-            // ===== 获取职位链接 =====
-            let jobLink = '';
-            if (titleEl) {
-                jobLink = titleEl.href || (titleEl.querySelector('a') ? titleEl.querySelector('a').href : '');
-            }
-            if (!jobLink) {
-                const allLinks = card.querySelectorAll('a[href*="jobdetail"], a[href*="/jobs/"]');
-                if (allLinks.length > 0) jobLink = allLinks[0].href;
-            }
-            const jobName = titleEl ? (titleEl.textContent || titleEl.innerText || '').trim() : '未知岗位';
-
-            // ===== 复选框（批量用） =====
-            const cb = document.createElement('input');
-            cb.type = 'checkbox'; cb.className = 'zpm-checkbox';
-            cb.title = `选择: ${jobName}`;
-            cb.dataset.jobName = jobName;
-            cb.dataset.jobLink = jobLink;
-            cb.dataset.matchScore = result.score;
-            cb.addEventListener('change', updateBatchBar);
-            card.insertBefore(cb, card.firstChild);
-
-            // ===== ⚡ 一键投递按钮 =====
-            const btn = document.createElement('button');
-            btn.className = 'zpm-btn-apply';
-            btn.dataset.jobLink = jobLink;
-            btn.dataset.jobName = jobName;
-            if (isApplied(jobName)) {
-                btn.classList.add('applied');
-                btn.innerHTML = '✅ 已投递';
-            } else {
-                btn.innerHTML = '⚡ 投递';
-                btn.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    quickApply(this, jobLink, jobName);
-                });
-            }
-            const actionArea = card.querySelector('[class*="action"],[class*="operate"],[class*="btn-group"]') || card;
-            actionArea.appendChild(btn);
-        });
-        return stats;
+        return { score: total > 0 ? Math.round((matchedW / total) * 100) : 0, matched };
     }
 
     // ============================================================
-    // 5. 投递功能
+    // 智联招聘投递引擎
     // ============================================================
+    const ZhaopinEngine = {
+        name: '智联招聘',
+        running: false,
+        completed: 0,
+        target: 50,
+        logs: [],
 
-    // ⚡ 一键投递 → 打开详情页，让详情页脚本处理自动投递
-    function quickApply(btn, jobLink, jobName) {
-        if (btn.classList.contains('applied')) {
-            GM_notification({ text: `已投递过: ${jobName}`, timeout: 2000 });
-            return;
-        }
-        if (isApplied(jobName)) {
-            btn.classList.add('applied');
-            btn.innerHTML = '✅ 已投递';
-            GM_notification({ text: `之前已投递: ${jobName}`, timeout: 2000 });
-            return;
-        }
-        if (!jobLink) {
-            GM_notification({ text: `⚠ 无法获取 ${jobName} 的链接`, timeout: 3000 });
-            return;
-        }
-        // 保存目标，在详情页脚本会读取并自动投递
-        GM_setValue('zpm_pending_apply', JSON.stringify({ name: jobName, link: jobLink }));
-        // 跳转到详情页
-        window.location.href = jobLink;
-    }
+        // 获取岗位列表（兼容多种页面结构）
+        getJobs() {
+            // 参考脚本的智联选择器 + 我们的兜底
+            let jobs = document.querySelectorAll('.positionlist__list .joblist-box__item');
+            if (jobs.length === 0) jobs = document.querySelectorAll('.joblist-box .jobcard');
+            if (jobs.length === 0) jobs = document.querySelectorAll('[class*="jobcard"]');
+            if (jobs.length === 0) jobs = document.querySelectorAll('.job-item');
+            return Array.from(jobs);
+        },
 
-    // ============================================================
-    // 6. 详情页自动投递（核心！）
-    // ============================================================
+        // 获取岗位详细信息
+        getJobInfo(jobEl) {
+            // 岗位名称
+            const nameEl = jobEl.querySelector('.jobinfo__name') || jobEl.querySelector('[class*="job-name"]') || jobEl.querySelector('a[class*="title"]');
+            const name = nameEl ? (nameEl.textContent || nameEl.innerText || '').trim() : '';
 
-    let detailAutoApplyDone = false;
+            // 城市
+            const cityEl = jobEl.querySelector('.jobinfo__other-info-item span, .jobinfo__other-info-item');
+            const city = cityEl ? cityEl.textContent.trim() : '';
 
-    function handleJobDetailPage() {
-        const isDetailPage = window.location.pathname.includes('/jobdetail/') || window.location.pathname.includes('/jobs/');
-        if (!isDetailPage) return;
+            // 全部文本用于匹配度
+            const fullText = jobEl.textContent || '';
 
-        // 检查是否有待投递任务
-        let pending = null;
-        try {
-            const raw = GM_getValue('zpm_pending_apply', '');
-            if (raw) pending = JSON.parse(raw);
-        } catch {}
-        const jobName = pending ? pending.name : document.title || '当前岗位';
+            // 投递按钮
+            const applyBtn = jobEl.querySelector('.collect-and-apply__btn') || jobEl.querySelector('[class*="apply"]') || jobEl.querySelector('[class*="deliver"]');
 
-        console.log('📄 已进入岗位详情页:', jobName);
+            return { name, city, fullText, applyBtn };
+        },
 
-        // ===== 查找"立即投递"按钮 =====
-        function findApplyButton() {
-            const selectors = [
-                'button[class*="apply"]', 'button[class*="deliver"]', 'button[class*="submit"]',
-                'a[class*="apply"]', 'a[class*="deliver"]',
-                '[class*="btn-apply"]', '[class*="btn-deliver"]',
-                '[class*="apply-btn"]', '[class*="deliver-btn"]',
-                'button:contains(投递)', 'a:contains(投递)',
-                // 通用: 找包含"投递"或"申请"的按钮
-                'button', 'a[class*="btn"]',
-            ];
-            for (const sel of selectors) {
-                const els = document.querySelectorAll(sel);
-                for (const el of els) {
-                    const t = el.textContent.trim();
-                    if (t.includes('投递') || t.includes('申请') || t.includes('应聘')) return el;
+        // 投递单个岗位
+        async applyOne(jobEl, jobInfo) {
+            // 检查是否已投递
+            if (isApplied(jobInfo.name)) {
+                jobEl.classList.add('zpm-job-applied');
+                return { success: false, reason: '已投递过' };
+            }
+
+            // 检查城市匹配
+            if (CONFIG.city && !jobInfo.city.includes(CONFIG.city)) {
+                jobEl.style.opacity = '0.5';
+                return { success: false, reason: `城市不匹配: ${jobInfo.city}` };
+            }
+
+            // 检查职位关键词
+            const hasKeyword = CONFIG.jobKeywords.some(k => jobInfo.name.includes(k) || jobInfo.fullText.includes(k));
+            if (!hasKeyword) {
+                jobEl.style.opacity = '0.5';
+                return { success: false, reason: '岗位不匹配' };
+            }
+
+            // 高亮匹配岗位
+            jobEl.classList.add('zpm-job-highlight');
+
+            // 点击投递按钮
+            if (jobInfo.applyBtn) {
+                try {
+                    jobInfo.applyBtn.click();
+                    await delay(1000);
+
+                    // 检查弹窗并确认
+                    this.confirmDialog();
+
+                    saveApplied(jobInfo.name);
+                    this.completed++;
+                    return { success: true, reason: '已投递' };
+                } catch (e) {
+                    return { success: false, reason: `点击失败: ${e.message}` };
                 }
             }
-            // 更暴力的: 遍历所有可见按钮
-            const allBtns = document.querySelectorAll('button, a[class*="btn"], [role="button"]');
-            for (const el of allBtns) {
-                const t = el.textContent.trim();
-                if ((t.includes('投递') || t.includes('申请') || t.includes('应聘')) && el.offsetParent !== null) return el;
-            }
-            return null;
-        }
 
-        // ===== 自动确认弹窗 =====
-        function autoConfirmDialog() {
-            const dialogs = document.querySelectorAll('[class*="dialog"],[class*="modal"],[class*="popup"],#layui-layer');
+            return { success: false, reason: '未找到投递按钮' };
+        },
+
+        // 确认弹窗
+        confirmDialog() {
+            // 智联投递后可能有弹窗，尝试关闭/确认
+            const dialogs = document.querySelectorAll('[class*="dialog"],[class*="modal"],[class*="popup"]');
             dialogs.forEach(dlg => {
-                if (dlg.style.display === 'none') return;
+                if (dlg.offsetParent === null) return;
                 // 勾选同意
-                const cbs = dlg.querySelectorAll('input[type="checkbox"]');
-                cbs.forEach(cb => { if (!cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change',{bubbles:true})); } });
+                dlg.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    if (!cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change',{bubbles:true})); }
+                });
                 // 点确认
-                const confirmBtns = dlg.querySelectorAll('[class*="submit"],[class*="confirm"],[class*="primary"],button:last-child');
-                confirmBtns.forEach(b => { if (b.offsetParent !== null) setTimeout(() => b.click(), 200); });
+                const confirmBtn = dlg.querySelector('[class*="submit"],[class*="confirm"],[class*="primary"],button:last-child');
+                if (confirmBtn) setTimeout(() => confirmBtn.click(), 200);
+                // 点关闭
+                const closeBtn = dlg.querySelector('[class*="close"],[class*="cancel"]');
+                if (closeBtn) setTimeout(() => closeBtn.click(), 500);
             });
-        }
+        },
 
-        // ===== 添加浮动按钮（用户确认后触发投递） =====
-        function addFloatButton() {
-            if (document.getElementById('zpm-detail-float-btn')) return;
-            const isAlreadyApplied = isApplied(jobName);
-
-            const floatBtn = document.createElement('div');
-            floatBtn.id = 'zpm-detail-float-btn';
-            if (isAlreadyApplied) {
-                floatBtn.classList.add('applied');
-                floatBtn.innerHTML = '✅ 已投递此岗位';
-            } else {
-                floatBtn.innerHTML = '⚡ 点击投递此岗位';
-                floatBtn.onclick = function() {
-                    const applyBtn = findApplyButton();
-                    if (applyBtn) {
-                        // 点击投递
-                        applyBtn.click();
-                        // 多次尝试确认弹窗
-                        for (let i = 1; i <= 3; i++) {
-                            setTimeout(autoConfirmDialog, i * 800);
-                        }
-                        // 标记已投递
-                        floatBtn.classList.add('applied');
-                        floatBtn.innerHTML = '✅ 已投递';
-                        addAppliedJob(jobName);
-                        GM_notification({ text: `✅ 已投递: ${jobName}`, timeout: 3000 });
-                        // 清除待投递
-                        GM_setValue('zpm_pending_apply', '');
-                    } else {
-                        GM_notification({ text: '⚠ 没找到投递按钮，请手动投递', timeout: 3000 });
-                    }
-                };
+        // 翻到下一页
+        async goNextPage() {
+            const nextBtn = document.querySelector('.btn.soupager__btn:not([disabled])') ||
+                           document.querySelector('[class*="next"]:not([disabled])') ||
+                           document.querySelector('.pagination .next:not(.disabled)');
+            if (nextBtn && nextBtn.textContent.includes('下一页')) {
+                nextBtn.click();
+                await delay(2000);
+                return true;
             }
-            document.body.appendChild(floatBtn);
-        }
+            return false;
+        },
 
-        // ===== 如果是通过"一键投递"跳转过来的，自动触发 =====
-        function autoApplyFromPending() {
-            if (detailAutoApplyDone) return;
-            if (!pending) return;
-            if (isApplied(pending.name)) {
-                detailAutoApplyDone = true;
-                GM_setValue('zpm_pending_apply', '');
+        // 主运行循环
+        async run(targetCount) {
+            this.running = true;
+            this.completed = 0;
+            this.target = targetCount || CONFIG.deliverCount;
+            this.logs = [];
+
+            this.addLog('🚀 智联招聘自动投递启动', 'info');
+
+            while (this.running && this.completed < this.target) {
+                const jobs = this.getJobs();
+                if (jobs.length === 0) {
+                    this.addLog('⚠ 未找到岗位列表', 'error');
+                    break;
+                }
+
+                this.addLog(`📋 本页找到 ${jobs.length} 个岗位`, 'info');
+
+                for (const job of jobs) {
+                    if (!this.running || this.completed >= this.target) break;
+
+                    const info = this.getJobInfo(job);
+                    if (!info.name) continue;
+
+                    const match = calcMatch(info.fullText);
+                    const result = await this.applyOne(job, info);
+
+                    if (result.success) {
+                        this.addLog(`✅ [${this.completed}/${this.target}] ${info.name} (${match.score}%)`, 'success');
+                    } else {
+                        if (result.reason !== '已投递过') {
+                            // 只记录非重复的跳过
+                        }
+                    }
+
+                    // 更新UI
+                    updateUI(this);
+                    await delay(CONFIG.batchInterval);
+                }
+
+                // 翻页
+                if (this.running && this.completed < this.target && CONFIG.autoNextPage) {
+                    const hasNext = await this.goNextPage();
+                    if (!hasNext) {
+                        this.addLog('📭 已到最后一页', 'info');
+                        break;
+                    }
+                    this.addLog('📄 翻到下一页', 'info');
+                } else {
+                    break;
+                }
+            }
+
+            if (this.completed >= this.target) {
+                this.addLog(`🎉 达到目标！共投递 ${this.completed} 个岗位`, 'success');
+                toast(`🎉 投递完成！共 ${this.completed} 个`, 'success');
+            } else {
+                this.addLog(`⏸ 已暂停，已投递 ${this.completed} 个`, 'info');
+            }
+
+            this.running = false;
+            updateUI(this);
+        },
+
+        stop() {
+            this.running = false;
+            this.addLog('⏸ 已手动暂停', 'info');
+        },
+
+        addLog(msg, type = 'info') {
+            this.logs.push({ msg, type, time: new Date().toLocaleTimeString() });
+            renderLogs(this);
+        }
+    };
+
+    // ============================================================
+    // Boss直聘引擎（简化版）
+    // ============================================================
+    const BossEngine = {
+        name: 'Boss直聘',
+        running: false,
+        completed: 0,
+        target: 50,
+        logs: [],
+
+        async run(targetCount) {
+            this.running = true;
+            this.completed = 0;
+            this.target = targetCount || CONFIG.deliverCount;
+            this.logs = [];
+
+            this.addLog('🚀 Boss直聘模式启动', 'info');
+            toast('Boss直聘模式: 请在岗位搜索页运行', 'info', 3000);
+
+            if (location.pathname === '/web/geek/chat') {
+                this.addLog('💬 检测到聊天页面，请切换到岗位搜索页', 'skip');
+                this.running = false;
+                updateUI(this);
                 return;
             }
 
-            // 等待页面加载，自动点击投递
-            let attempts = 0;
-            const timer = setInterval(() => {
-                attempts++;
-                const applyBtn = findApplyButton();
-                if (applyBtn) {
-                    clearInterval(timer);
-                    console.log('🎯 找到投递按钮，自动点击...');
-                    applyBtn.click();
-                    // 确认弹窗
-                    for (let i = 1; i <= 3; i++) {
-                        setTimeout(autoConfirmDialog, i * 800);
+            // 检查是否在岗位列表页
+            if (!location.pathname.includes('/jobs') && !location.pathname.includes('/geek/jobs')) {
+                this.addLog('⚠ 请先到岗位搜索页再运行', 'error');
+                this.running = false;
+                updateUI(this);
+                return;
+            }
+
+            let scrollTop = 0;
+
+            while (this.running && this.completed < this.target) {
+                const jobs = document.querySelectorAll('.job-list-container .job-card-box');
+                if (jobs.length === 0) {
+                    this.addLog('⚠ 未找到岗位卡片', 'error');
+                    break;
+                }
+
+                this.addLog(`📋 本页 ${jobs.length} 个岗位`, 'info');
+
+                for (const job of jobs) {
+                    if (!this.running || this.completed >= this.target) break;
+
+                    // 点击岗位
+                    job.click();
+                    await delay(1500);
+
+                    // 获取岗位信息
+                    const name = job.querySelector('.job-name')?.textContent?.trim() || '';
+                    const location = job.querySelector('.company-location')?.textContent?.trim() || '';
+                    const fullText = job.textContent || '';
+                    const match = calcMatch(fullText);
+
+                    // 检查城市
+                    if (CONFIG.city && !location.includes(CONFIG.city)) {
+                        this.addLog(`⏭ ${name} - 城市不匹配: ${location}`, 'skip');
+                        scrollTop += 80;
+                        window.scrollTo({ top: scrollTop, behavior: 'smooth' });
+                        await delay(1000);
+                        continue;
                     }
-                    // 标记
-                    setTimeout(() => {
-                        addAppliedJob(pending.name);
-                        detailAutoApplyDone = true;
-                        GM_setValue('zpm_pending_apply', '');
-                        GM_notification({ text: `✅ 已自动投递: ${pending.name}`, timeout: 3000 });
-                        // 显示成功浮动按钮
-                        const fb = document.getElementById('zpm-detail-float-btn');
-                        if (fb) { fb.classList.add('applied'); fb.innerHTML = '✅ 已投递'; }
-                    }, 3000);
-                } else if (attempts >= APPLY_CONFIG.retryTimes) {
-                    clearInterval(timer);
-                    console.log('⚠ 未找到投递按钮，请在页面中手动点击');
-                    addFloatButton(); // 改为显示手动按钮
+
+                    // 检查关键词
+                    const hasKeyword = CONFIG.jobKeywords.some(k => name.includes(k) || fullText.includes(k));
+                    if (!hasKeyword) {
+                        this.addLog(`⏭ ${name} - 岗位不匹配 (${match.score}%)`, 'skip');
+                        scrollTop += 80;
+                        window.scrollTo({ top: scrollTop, behavior: 'smooth' });
+                        await delay(1000);
+                        continue;
+                    }
+
+                    // 点击"立即沟通"
+                    const chatBtn = document.querySelector('a.op-btn.op-btn-chat');
+                    if (!chatBtn || !chatBtn.textContent.includes('立即沟通')) {
+                        this.addLog(`⏭ ${name} - 无立即沟通按钮`, 'skip');
+                        scrollTop += 80;
+                        window.scrollTo({ top: scrollTop, behavior: 'smooth' });
+                        await delay(1000);
+                        continue;
+                    }
+
+                    chatBtn.click();
+                    await delay(1500);
+
+                    // 关闭弹窗（留在本页）
+                    const stayBtn = document.querySelector('a.default-btn.cancel-btn');
+                    if (stayBtn && stayBtn.textContent.includes('留在')) {
+                        stayBtn.click();
+                    }
+
+                    this.completed++;
+                    saveApplied(name);
+                    this.addLog(`✅ [${this.completed}/${this.target}] ${name} (${match.score}%)`, 'success');
+                    updateUI(this);
+
+                    scrollTop += 80;
+                    window.scrollTo({ top: scrollTop, behavior: 'smooth' });
+                    await delay(CONFIG.batchInterval);
                 }
-            }, APPLY_CONFIG.retryDelay);
-        }
 
-        // 先加浮动按钮
-        addFloatButton();
-        // 再尝试自动投递
-        autoApplyFromPending();
-    }
-
-    // ============================================================
-    // 7. 批量投递
-    // ============================================================
-
-    let isBatchRunning = false;
-
-    function getSelectedJobs() {
-        const selected = [];
-        document.querySelectorAll('.zpm-checkbox:checked').forEach(cb => {
-            const card = cb.closest('[class*="job"]');
-            const btn = card ? card.querySelector('.zpm-btn-apply') : null;
-            if (btn && !btn.classList.contains('applied')) {
-                selected.push({
-                    name: cb.dataset.jobName || '',
-                    link: cb.dataset.jobLink || '',
-                    score: parseInt(cb.dataset.matchScore) || 0,
-                    btn: btn,
-                });
-            }
-        });
-        return selected;
-    }
-
-    function updateBatchBar() {
-        const selected = getSelectedJobs();
-        const bar = document.getElementById('zpm-batch-bar');
-        const info = document.getElementById('zpm-batch-info-text');
-        if (selected.length > 0) {
-            bar.style.display = 'flex';
-            info.innerHTML = `已选择 <strong>${selected.length}</strong> 个岗位 (高匹配: <strong>${selected.filter(s=>s.score>=60).length}</strong>)`;
-        } else {
-            bar.style.display = 'none';
-        }
-    }
-
-    function showProgress(total) {
-        const overlay = document.getElementById('zpm-progress-overlay');
-        overlay.style.display = 'flex';
-        document.getElementById('zpm-progress-bar-fill').style.width = '0%';
-        document.getElementById('zpm-progress-text').textContent = `准备投递 0 / ${total}...`;
-        document.getElementById('zpm-progress-close').style.display = 'none';
-    }
-
-    function updateProgress(current, total, results) {
-        document.getElementById('zpm-progress-bar-fill').style.width = Math.round((current/total)*100) + '%';
-        document.getElementById('zpm-progress-text').textContent = `投递中 ${current} / ${total}...`;
-        if (current >= total) {
-            const succ = results.filter(r=>r.success).length;
-            const fail = results.filter(r=>!r.success).length;
-            document.getElementById('zpm-progress-text').innerHTML = `
-                ✅ 投递完成！<br>
-                <span style="color:#52c41a">成功: ${succ}</span>
-                ${fail>0?` | <span style="color:#ff4d4f">失败: ${fail}</span>`:''}
-            `;
-            document.getElementById('zpm-progress-close').style.display = 'inline-block';
-            GM_notification({ text: `批量投递完成！成功 ${succ} 个${fail>0?`，失败 ${fail} 个`:''}`, timeout: 5000 });
-        }
-    }
-
-    async function batchApply() {
-        if (isBatchRunning) return;
-        const selected = getSelectedJobs();
-        if (selected.length === 0) { GM_notification({ text:'请先勾选要投递的岗位', timeout:2000 }); return; }
-        if (selected.length > APPLY_CONFIG.maxBatchPerRound) {
-            if (!confirm(`一次批量投递建议不超过 ${APPLY_CONFIG.maxBatchPerRound} 个，当前选中 ${selected.length} 个，是否继续？`)) return;
-        }
-
-        isBatchRunning = true;
-        const results = [];
-        showProgress(selected.length);
-
-        for (let i = 0; i < selected.length; i++) {
-            const job = selected[i];
-            updateProgress(i + 1, selected.length, results);
-
-            try {
-                if (job.link) {
-                    // 保存待投递任务
-                    GM_setValue('zpm_pending_apply', JSON.stringify({ name: job.name, link: job.link }));
-                    // 在当前标签跳转（自动投递由 handleJobDetailPage 处理）
-                    // 但因为是循环，我们不能真的跳转，只能打开新标签
-                    const tab = GM_openInTab(job.link, { active: false, insert: true, setParent: true });
-                    // 等待后关闭
-                    await new Promise(r => setTimeout(r, 2000));
-                    // 标记（打开即视为投递，因为详情页脚本会处理）
-                    markAsApplied(job.btn, job.name);
-                    results.push({ name: job.name, success: true });
-                    if (tab && tab.close) try { tab.close(); } catch {}
-                } else {
-                    results.push({ name: job.name, success: false, reason: '无链接' });
+                // Boss直聘是滚动加载，这里简单处理
+                if (this.running && this.completed < this.target) {
+                    scrollTop += 500;
+                    window.scrollTo({ top: scrollTop, behavior: 'smooth' });
+                    await delay(2000);
                 }
-            } catch(e) {
-                results.push({ name: job.name, success: false, reason: e.message });
             }
 
-            if (i < selected.length - 1) {
-                await new Promise(r => setTimeout(r, APPLY_CONFIG.batchInterval));
+            if (this.completed >= this.target) {
+                this.addLog(`🎉 达到目标！共投递 ${this.completed} 个`, 'success');
+                toast(`🎉 投递完成！共 ${this.completed} 个`, 'success');
             }
+
+            this.running = false;
+            updateUI(this);
+        },
+
+        stop() {
+            this.running = false;
+            this.addLog('⏸ 已手动暂停', 'info');
+        },
+
+        addLog(msg, type = 'info') {
+            this.logs.push({ msg, type, time: new Date().toLocaleTimeString() });
+            renderLogs(this);
         }
-
-        updateProgress(selected.length, selected.length, results);
-        isBatchRunning = false;
-        updateBatchBar();
-        GM_setValue('zpm_pending_apply', '');
-        console.log('📊 批量投递结果:', results);
-    }
-
-    function markAsApplied(btn, name) {
-        btn.classList.add('applied');
-        btn.innerHTML = '✅ 已投递';
-        btn.onclick = null; // 移除事件
-        addAppliedJob(name);
-    }
+    };
 
     // ============================================================
-    // 8. 浮动面板
+    // UI
     // ============================================================
+    let currentEngine = null;
+
+    function getEngine() {
+        const host = location.host;
+        if (host.includes('zhaopin')) return ZhaopinEngine;
+        if (host.includes('zhipin')) return BossEngine;
+        return null;
+    }
+
     function createPanel() {
-        if (document.getElementById('zpm-panel')) return;
+        if (document.getElementById('zpm-v3-panel')) return;
+
+        const engine = getEngine();
+        if (!engine) return;
+
         const panel = document.createElement('div');
-        panel.id = 'zpm-panel';
-        let filterState = 'all';
+        panel.id = 'zpm-v3-panel';
         panel.innerHTML = `
-            <div class="zpm-header" id="zpm-panel-header">
-                <span>🎯 智能匹配 v2.1</span>
-                <span class="zpm-close" id="zpm-panel-close">×</span>
+            <div class="header" id="zpm-v3-drag">
+                <h3>🤖 ${engine.name}自动投递</h3>
+                <span class="close-btn" id="zpm-v3-close">✕</span>
             </div>
-            <div class="zpm-body">
-                <div class="zpm-stat">
-                    <div class="zpm-stat-item"><div class="zpm-stat-num" id="zpm-stat-total">0</div><div class="zpm-stat-label">岗位总数</div></div>
-                    <div class="zpm-stat-item"><div class="zpm-stat-num" id="zpm-stat-matched">0</div><div class="zpm-stat-label">高匹配</div></div>
-                    <div class="zpm-stat-item"><div class="zpm-stat-num" id="zpm-stat-high">0</div><div class="zpm-stat-label">强烈推荐</div></div>
+            <div class="body">
+                <div class="zpm-status-card">
+                    <div class="zpm-status-grid">
+                        <div class="zpm-status-item">
+                            <span class="zpm-status-label">状态</span>
+                            <span class="zpm-status-value stopped" id="zpm-v3-status">就绪</span>
+                        </div>
+                        <div class="zpm-status-item">
+                            <span class="zpm-status-label">匹配度</span>
+                            <span class="zpm-status-value" id="zpm-v3-score">0%</span>
+                        </div>
+                        <div class="zpm-status-item">
+                            <span class="zpm-status-label">已投递</span>
+                            <span class="zpm-status-value" id="zpm-v3-count">0</span>
+                        </div>
+                        <div class="zpm-status-item">
+                            <span class="zpm-status-label">目标</span>
+                            <span class="zpm-status-value" id="zpm-v3-target">${CONFIG.deliverCount}</span>
+                        </div>
+                    </div>
+                    <div class="zpm-progress-bar">
+                        <div class="zpm-progress-fill" id="zpm-v3-progress"></div>
+                    </div>
                 </div>
+
                 <div class="zpm-filter-group">
                     <button class="zpm-filter-btn active" data-filter="all">全部</button>
-                    <button class="zpm-filter-btn" data-filter="matched">仅看高匹配</button>
+                    <button class="zpm-filter-btn" data-filter="high">高匹配(≥60%)</button>
                     <button class="zpm-filter-btn" data-filter="salary">薪资合适</button>
+                    <button class="zpm-filter-btn" data-filter="match" style="background:#52c41a;color:#fff;border-color:#52c41a;">仅投递匹配</button>
                 </div>
-                <div style="border-top:1px solid #f0f0f0;padding-top:8px;margin-top:8px;">
-                    <div style="font-size:12px;font-weight:bold;margin-bottom:6px;">⚡ 批量投递</div>
-                    <button id="zpm-select-high" class="zpm-filter-btn" style="background:#52c41a;color:#fff;border-color:#52c41a;">全选高匹配</button>
-                    <button id="zpm-select-all" class="zpm-filter-btn">全选本页</button>
-                    <button id="zpm-unselect-all" class="zpm-filter-btn">取消全选</button>
-                    <div style="margin-top:6px;">
-                        <button id="zpm-batch-apply-btn" style="width:100%;padding:10px;background:linear-gradient(135deg,#ff6a00,#ee0979);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:bold;">🚀 批量投递选中岗位</button>
-                    </div>
+
+                <div style="font-size:12px;color:#666;margin:6px 0;">
+                    🎯 ${CONFIG.city} · ${CONFIG.jobKeywords.slice(0,3).join('/')} · ${CONFIG.expectedSalary[0]/1000}-${CONFIG.expectedSalary[1]/1000}K
                 </div>
-                <div style="margin-top:8px;padding:8px;background:#f5f5f5;border-radius:8px;">
-                    <div style="font-size:12px;font-weight:bold;margin-bottom:4px;">💡 技能 (${Object.keys(MY_SKILLS).length}项)</div>
-                    <div style="font-size:11px;color:#666;max-height:80px;overflow-y:auto;">
-                        ${Object.entries(MY_SKILLS).sort((a,b)=>b[1].weight-a[1].weight).slice(0,15).map(([k,v])=>`<span style="display:inline-block;padding:1px 6px;margin:2px;background:#e6f7ff;border-radius:4px;font-size:10px;">${k}(${v.weight})</span>`).join('')}
-                    </div>
-                </div>
-                <div style="margin-top:6px;text-align:center;">
-                    <button id="zpm-refresh-btn" style="padding:6px 20px;background:#1890ff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">🔄 刷新</button>
-                </div>
-                <div style="margin-top:6px;text-align:center;font-size:11px;color:#999;">
-                    <span>💡 点 ⚡ 投递 → 跳转详情页自动投递</span>
+
+                <button class="zpm-toggle-btn start" id="zpm-v3-toggle">
+                    🚀 启动自动投递
+                </button>
+
+                <div class="zpm-log-area" id="zpm-v3-logs">
+                    <div style="color:#999;text-align:center;padding:20px 0;">等待启动...</div>
                 </div>
             </div>
-            <div class="zpm-footer">${PREFERENCES.city} · ${PREFERENCES.expectedSalary[0]/1000}-${PREFERENCES.expectedSalary[1]/1000}K · v2.1</div>
+            <div class="zpm-footer">v3.0 · 自动投递引擎 · ${CONFIG.saveApplied ? '💾 已去重' : ''}</div>
         `;
         document.body.appendChild(panel);
 
-        document.getElementById('zpm-panel-close').addEventListener('click', () => panel.style.display = 'none');
+        // 关闭
+        document.getElementById('zpm-v3-close').onclick = () => panel.remove();
+
+        // 拖拽
+        let isDragging = false, ox, oy;
+        const hdr = document.getElementById('zpm-v3-drag');
+        hdr.onmousedown = e => { isDragging = true; ox = e.clientX - panel.offsetLeft; oy = e.clientY - panel.offsetTop; };
+        document.onmousemove = e => { if (isDragging) { panel.style.left = (e.clientX - ox) + 'px'; panel.style.top = (e.clientY - oy) + 'px'; panel.style.right = 'auto'; } };
+        document.onmouseup = () => { isDragging = false; };
+
+        // 筛选按钮
         panel.querySelectorAll('.zpm-filter-btn[data-filter]').forEach(btn => {
-            btn.addEventListener('click', () => {
+            btn.onclick = () => {
                 panel.querySelectorAll('.zpm-filter-btn[data-filter]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                filterState = btn.dataset.filter;
-                applyFilter(filterState);
-            });
+                applyFilter(btn.dataset.filter);
+            };
         });
-        document.getElementById('zpm-refresh-btn').addEventListener('click', refreshStats);
-        document.getElementById('zpm-select-high').addEventListener('click', () => {
-            document.querySelectorAll('.zpm-checkbox').forEach(cb => { const c=cb.closest('[class*="job"]'); cb.checked = !!(c&&c.querySelector('.zpm-match-high')); });
-            updateBatchBar();
-        });
-        document.getElementById('zpm-select-all').addEventListener('click', () => { document.querySelectorAll('.zpm-checkbox').forEach(cb=>cb.checked=true); updateBatchBar(); });
-        document.getElementById('zpm-unselect-all').addEventListener('click', () => { document.querySelectorAll('.zpm-checkbox').forEach(cb=>cb.checked=false); updateBatchBar(); });
-        document.getElementById('zpm-batch-apply-btn').addEventListener('click', batchApply);
 
-        let isDragging = false, ox, oy;
-        const hdr = document.getElementById('zpm-panel-header');
-        hdr.addEventListener('mousedown', e => { isDragging=true; ox=e.clientX-panel.offsetLeft; oy=e.clientY-panel.offsetTop; });
-        document.addEventListener('mousemove', e => { if(isDragging){ panel.style.left=(e.clientX-ox)+'px'; panel.style.top=(e.clientY-oy)+'px'; panel.style.right='auto'; } });
-        document.addEventListener('mouseup', () => { isDragging=false; });
+        // 启动按钮
+        document.getElementById('zpm-v3-toggle').onclick = async () => {
+            const engine = getEngine();
+            if (!engine) return toast('不支持该网站', 'error');
+
+            if (!engine.running) {
+                // 检查设置
+                if (location.host.includes('zhaopin') && !location.pathname.includes('/sou/') && !document.querySelector('.joblist-box')) {
+                    toast('请先到智联招聘搜索页面', 'error', 3000);
+                    return;
+                }
+                await engine.run(CONFIG.deliverCount);
+            } else {
+                engine.stop();
+                document.getElementById('zpm-v3-toggle').textContent = '🚀 启动自动投递';
+                document.getElementById('zpm-v3-toggle').className = 'zpm-toggle-btn start';
+            }
+        };
+
+        // 先处理匹配度显示
+        processJobCards();
+    }
+
+    function updateUI(engine) {
+        const statusEl = document.getElementById('zpm-v3-status');
+        const countEl = document.getElementById('zpm-v3-count');
+        const targetEl = document.getElementById('zpm-v3-target');
+        const progressEl = document.getElementById('zpm-v3-progress');
+        const toggleEl = document.getElementById('zpm-v3-toggle');
+
+        if (!statusEl) return;
+
+        if (engine.running) {
+            statusEl.textContent = '运行中';
+            statusEl.className = 'zpm-status-value running';
+            toggleEl.textContent = '⏹ 停止投递';
+            toggleEl.className = 'zpm-toggle-btn stop';
+        } else {
+            statusEl.textContent = engine.completed > 0 ? '已完成' : '就绪';
+            statusEl.className = 'zpm-status-value ' + (engine.completed > 0 ? 'done' : 'stopped');
+            toggleEl.textContent = '🚀 启动自动投递';
+            toggleEl.className = 'zpm-toggle-btn start';
+        }
+
+        countEl.textContent = engine.completed;
+        targetEl.textContent = engine.target;
+        const pct = Math.min(100, Math.round((engine.completed / engine.target) * 100));
+        progressEl.style.width = pct + '%';
+    }
+
+    function renderLogs(engine) {
+        const logArea = document.getElementById('zpm-v3-logs');
+        if (!logArea) return;
+        const recent = engine.logs.slice(-20);
+        logArea.innerHTML = recent.map(l =>
+            `<div class="zpm-log-item zpm-log-${l.type}">[${l.time}] ${l.msg}</div>`
+        ).join('') || '<div style="color:#999;text-align:center;">暂无日志</div>';
+        logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    // ============================================================
+    // 页面匹配度处理
+    // ============================================================
+    function processJobCards() {
+        let cards = [];
+        if (location.host.includes('zhaopin')) {
+            cards = document.querySelectorAll('.positionlist__list .joblist-box__item, .joblist-box .jobcard, [class*="jobcard"]');
+        } else if (location.host.includes('zhipin')) {
+            cards = document.querySelectorAll('.job-card-box');
+        }
+
+        cards.forEach(card => {
+            if (card.dataset.zpm3 === '1') return;
+            card.dataset.zpm3 = '1';
+
+            const text = card.textContent || '';
+            const result = calcMatch(text);
+
+            // 找标题元素
+            const titleEl = card.querySelector('.jobinfo__name, .job-name, [class*="job-name"], a[class*="title"], h3');
+
+            if (result.score > 0 && titleEl) {
+                const badge = document.createElement('span');
+                badge.className = `zpm-badge ${result.score >= 60 ? 'zpm-badge-high' : result.score >= 30 ? 'zpm-badge-mid' : 'zpm-badge-low'}`;
+                badge.textContent = result.score + '%';
+                badge.title = `匹配: ${result.matched.join(', ')}`;
+                titleEl.parentNode.insertBefore(badge, titleEl.nextSibling);
+
+                if (result.score >= 60) {
+                    card.classList.add('zpm-job-highlight');
+                }
+            }
+
+            // 标记已投递
+            const name = titleEl ? titleEl.textContent?.trim() : '';
+            if (name && isApplied(name)) {
+                card.classList.add('zpm-job-applied');
+                const badge = document.createElement('span');
+                badge.style.cssText = 'display:inline-block;padding:1px 6px;border-radius:8px;font-size:11px;background:#999;color:#fff;margin-left:4px;';
+                badge.textContent = '✅ 已投';
+                if (titleEl) titleEl.parentNode.insertBefore(badge, titleEl.nextSibling);
+            }
+        });
     }
 
     function applyFilter(state) {
-        document.querySelectorAll('[class*="job"]').forEach(card => {
-            const badge = card.querySelector('.zpm-match-badge');
-            const sb = card.querySelector('.zpm-salary-badge');
+        const cards = document.querySelectorAll('.positionlist__list .joblist-box__item, .joblist-box .jobcard, [class*="jobcard"], .job-card-box');
+        cards.forEach(card => {
+            const badge = card.querySelector('.zpm-badge');
             let show = true;
-            if (state === 'matched') show = badge && badge.classList.contains('zpm-match-high');
-            else if (state === 'salary') show = sb && sb.classList.contains('zpm-salary-good');
-            card.classList.toggle('zpm-hidden-job', !show);
+            if (state === 'high') {
+                show = badge && badge.classList.contains('zpm-badge-high');
+            } else if (state === 'match') {
+                show = badge && (badge.classList.contains('zpm-badge-high') || badge.classList.contains('zpm-badge-mid'));
+            }
+            card.classList.toggle('zpm-job-hidden', !show);
         });
     }
 
-    function refreshStats() {
-        const stats = processJobCards();
-        document.getElementById('zpm-stat-total').textContent = stats.total;
-        document.getElementById('zpm-stat-matched').textContent = stats.matched;
-        document.getElementById('zpm-stat-high').textContent = stats.highMatch;
-    }
-
     // ============================================================
-    // 9. 创建批量UI
-    // ============================================================
-    function createBatchUI() {
-        const bar = document.createElement('div');
-        bar.id = 'zpm-batch-bar';
-        bar.innerHTML = `
-            <div class="zpm-batch-info">🤖 <span id="zpm-batch-info-text">未选择岗位</span></div>
-            <div class="zpm-batch-actions">
-                <button class="zpm-batch-btn zpm-batch-btn-secondary" id="zpm-batch-clear">取消选择</button>
-                <button class="zpm-batch-btn zpm-batch-btn-primary" id="zpm-batch-go">🚀 批量投递</button>
-            </div>`;
-        document.body.appendChild(bar);
-        document.getElementById('zpm-batch-clear').addEventListener('click', () => { document.querySelectorAll('.zpm-checkbox:checked').forEach(cb=>cb.checked=false); updateBatchBar(); });
-        document.getElementById('zpm-batch-go').addEventListener('click', batchApply);
-
-        const overlay = document.createElement('div');
-        overlay.id = 'zpm-progress-overlay';
-        overlay.innerHTML = `
-            <div id="zpm-progress-box">
-                <h3>🚀 批量投递中</h3>
-                <div id="zpm-progress-bar-bg"><div id="zpm-progress-bar-fill"></div></div>
-                <div id="zpm-progress-text">准备中...</div>
-                <button id="zpm-progress-close">关闭</button>
-            </div>`;
-        document.body.appendChild(overlay);
-        document.getElementById('zpm-progress-close').addEventListener('click', () => overlay.style.display = 'none');
-    }
-
-    // ============================================================
-    // 10. 初始化
+    // 初始化
     // ============================================================
     function init() {
-        const isDetailPage = window.location.pathname.includes('/jobdetail/') || window.location.pathname.includes('/jobs/');
+        const host = location.host;
+        if (!host.includes('zhaopin') && !host.includes('zhipin')) return;
 
-        if (isDetailPage) {
-            // 详情页：只启动自动投递功能
-            handleJobDetailPage();
-            console.log('📄 详情页模式 - 自动投递已就绪');
-        } else {
-            // 搜索页：完整功能
-            createPanel();
-            createBatchUI();
-            setTimeout(refreshStats, 1000);
+        createPanel();
 
-            let timeout = null;
-            const observer = new MutationObserver(() => {
-                clearTimeout(timeout);
-                timeout = setTimeout(refreshStats, 500);
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
+        // 定时刷新匹配度
+        let timer;
+        const observer = new MutationObserver(() => {
+            clearTimeout(timer);
+            timer = setTimeout(processJobCards, 500);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
 
-            document.addEventListener('visibilitychange', () => {
-                if (!document.hidden) setTimeout(refreshStats, 500);
-            });
-
-            console.log('🎯 智联招聘 v2.1 已启动！');
-            console.log(`📊 ${Object.keys(MY_SKILLS).length} 项技能 | ${PREFERENCES.city} | ${PREFERENCES.expectedSalary[0]/1000}-${PREFERENCES.expectedSalary[1]/1000}K`);
-            console.log('⚡ 点击 ⚡投递 → 跳转详情页自动投递');
-        }
+        setTimeout(processJobCards, 1000);
+        console.log('🤖 自动投递助手 v3.0 已启动');
+        console.log(`📍 ${CONFIG.city} · 🎯 ${CONFIG.deliverCount} 个岗位`);
     }
 
     if (document.readyState === 'complete') init();
