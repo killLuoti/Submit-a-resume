@@ -579,9 +579,11 @@
 
                 <div class="zpm-filter-group">
                     <button class="zpm-filter-btn active" data-filter="all">全部</button>
-                    <button class="zpm-filter-btn" data-filter="high">高匹配(&gt;10%)</button>
-                    <button class="zpm-filter-btn" data-filter="salary">薪资合适</button>
-                    <button class="zpm-filter-btn" data-filter="match" style="background:#52c41a;color:#fff;border-color:#52c41a;">仅投递匹配</button>
+                    <button class="zpm-filter-btn" data-filter="gt10" style="background:#52c41a;color:#fff;border-color:#52c41a;">&gt;10%</button>
+                    <button class="zpm-filter-btn" data-filter="gt30">&gt;30%</button>
+                    <button class="zpm-filter-btn" data-filter="gt50">&gt;50%</button>
+                    <button class="zpm-filter-btn" data-filter="gt70">&gt;70%</button>
+                    <button class="zpm-filter-btn" data-filter="salary">💰 薪资合适</button>
                 </div>
 
                 <div style="font-size:12px;color:#666;margin:6px 0;">
@@ -729,10 +731,37 @@
         cards.forEach(card => {
             const badge = card.querySelector('.zpm-badge');
             let show = true;
-            if (state === 'high') {
+
+            // 从badge文本提取匹配度百分比
+            let score = 0;
+            if (badge) {
+                const match = badge.textContent.match(/(\d+)/);
+                if (match) score = parseInt(match[1]);
+            }
+
+            if (state === 'gt10') {
+                show = score > 10;
+            } else if (state === 'gt30') {
+                show = score > 30;
+            } else if (state === 'gt50') {
+                show = score > 50;
+            } else if (state === 'gt70') {
+                show = score > 70;
+            } else if (state === 'high') {
                 show = badge && badge.classList.contains('zpm-badge-high');
             } else if (state === 'match') {
                 show = badge && (badge.classList.contains('zpm-badge-high') || badge.classList.contains('zpm-badge-mid'));
+            } else if (state === 'salary') {
+                // 薪资合适 - 简单判断文本含K和数字
+                const text = card.textContent || '';
+                const salaryMatch = text.match(/(\d+)[-~到](\d+)K/i) || text.match(/(\d+)[-~到](\d+)k/i);
+                if (salaryMatch) {
+                    const low = parseInt(salaryMatch[1]) * 1000;
+                    const high = parseInt(salaryMatch[2]) * 1000;
+                    show = high >= CONFIG.expectedSalary[0] * 0.8;
+                } else {
+                    show = true; // 无法解析薪资就显示
+                }
             }
             card.classList.toggle('zpm-job-hidden', !show);
         });
