@@ -579,7 +579,7 @@
 
                 <div class="zpm-filter-group">
                     <button class="zpm-filter-btn active" data-filter="all">全部</button>
-                    <button class="zpm-filter-btn" data-filter="high">高匹配(≥60%)</button>
+                    <button class="zpm-filter-btn" data-filter="high">高匹配(&gt;10%)</button>
                     <button class="zpm-filter-btn" data-filter="salary">薪资合适</button>
                     <button class="zpm-filter-btn" data-filter="match" style="background:#52c41a;color:#fff;border-color:#52c41a;">仅投递匹配</button>
                 </div>
@@ -702,12 +702,12 @@
 
             if (result.score > 0 && titleEl) {
                 const badge = document.createElement('span');
-                badge.className = `zpm-badge ${result.score >= 60 ? 'zpm-badge-high' : result.score >= 30 ? 'zpm-badge-mid' : 'zpm-badge-low'}`;
+                badge.className = `zpm-badge ${result.score > 10 ? 'zpm-badge-high' : result.score >= 5 ? 'zpm-badge-mid' : 'zpm-badge-low'}`;
                 badge.textContent = result.score + '%';
                 badge.title = `匹配: ${result.matched.join(', ')}`;
                 titleEl.parentNode.insertBefore(badge, titleEl.nextSibling);
 
-                if (result.score >= 60) {
+                if (result.score > 10) {
                     card.classList.add('zpm-job-highlight');
                 }
             }
