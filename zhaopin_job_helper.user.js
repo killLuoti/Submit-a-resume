@@ -270,10 +270,10 @@
             if (jobInfo.applyBtn) {
                 try {
                     jobInfo.applyBtn.click();
-                    await delay(1000);
+                    await delay(800);
 
-                    // 检查弹窗并确认
-                    this.confirmDialog();
+                    // 关闭弹窗
+                    this.closeAllDialogs();
 
                     saveApplied(jobInfo.name);
                     this.completed++;
@@ -286,36 +286,119 @@
             return { success: false, reason: '未找到投递按钮' };
         },
 
-        // 确认弹窗
-        confirmDialog() {
-            // 智联投递后可能有弹窗，尝试关闭/确认
-            const dialogs = document.querySelectorAll('[class*="dialog"],[class*="modal"],[class*="popup"]');
-            dialogs.forEach(dlg => {
-                if (dlg.offsetParent === null) return;
-                // 勾选同意
-                dlg.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                    if (!cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change',{bubbles:true})); }
-                });
-                // 点确认
-                const confirmBtn = dlg.querySelector('[class*="submit"],[class*="confirm"],[class*="primary"],button:last-child');
-                if (confirmBtn) setTimeout(() => confirmBtn.click(), 200);
-                // 点关闭
-                const closeBtn = dlg.querySelector('[class*="close"],[class*="cancel"]');
-                if (closeBtn) setTimeout(() => closeBtn.click(), 500);
-            });
+        // 翻到下一页（增强版）
+        async goNextPage() {
+            // 先关闭可能存在的弹窗/浮层，防止遮挡翻页按钮
+            this.closeAllDialogs();
+
+            // 滚动到页面底部（分页按钮通常在底部）
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            await delay(800);
+
+            // 多种选择器适配智联的各种分页样式
+            const selectors = [
+                '.btn.soupager__btn:not([disabled])',           // 智联标准分页
+                '.soupager__btn:not([disabled])',                // 智联精简
+                '[class*="pager"] [class*="next"]:not([disabled])',
+                '[class*="pagination"] [class*="next"]:not(.disabled)',
+                '[class*="page"] [class*="next"]:not([disabled])',
+                '.page-next:not(.disabled)',
+                'a.next:not(.disabled)',
+                'button.next:not([disabled])',
+                '[class*="nextPage"]:not([disabled])',
+                '[class*="next-page"]:not([disabled])',
+                '[class*="btnNext"]:not([disabled])',
+                // 按文本查找
+                'a:not([disabled]):not(.disabled)',
+                'button:not([disabled]):not(.disabled)',
+            ];
+
+            for (const sel of selectors) {
+                const btns = document.querySelectorAll(sel);
+                for (const btn of btns) {
+                    const text = btn.textContent.trim();
+                    // 包含"下一页"、"next"、"›"、"»" 等翻页标识
+                    if (text.includes('下一页') || text.includes('next') || text === '›' || text === '»' || text === '>') {
+                        // 确保按钮可见
+                        if (btn.offsetParent !== null) {
+                            btn.click();
+                            this.addLog(`📄 翻到下一页 (选择器: ${sel})`, 'info');
+                            // 等待新页面加载
+                            await delay(2500);
+                            // 等待页面稳定后再滚动回顶部
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                            await delay(500);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // 兜底：尝试直接找有"下一页"文本且未禁用的元素
+            const allElements = document.querySelectorAll('a, button, span, div');
+            for (const el of allElements) {
+                const text = el.textContent.trim();
+                if ((text.includes('下一页') || text === '›' || text === '»') && el.offsetParent !== null) {
+                    const clickable = el.tagName === 'A' || el.tagName === 'BUTTON' || el.onclick || el.closest('a') || el.closest('button');
+                    if (clickable) {
+                        el.click();
+                        this.addLog('📄 翻到下一页 (兜底匹配)', 'info');
+                        await delay(2500);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                        await delay(500);
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         },
 
-        // 翻到下一页
-        async goNextPage() {
-            const nextBtn = document.querySelector('.btn.soupager__btn:not([disabled])') ||
-                           document.querySelector('[class*="next"]:not([disabled])') ||
-                           document.querySelector('.pagination .next:not(.disabled)');
-            if (nextBtn && nextBtn.textContent.includes('下一页')) {
-                nextBtn.click();
-                await delay(2000);
-                return true;
-            }
-            return false;
+        // 关闭所有弹窗/浮层（增强版）
+        closeAllDialogs() {
+            // 智联投递后的各种弹窗
+            const closeSelectors = [
+                '[class*="dialog"] [class*="close"]',
+                '[class*="modal"] [class*="close"]',
+                '[class*="popup"] [class*="close"]',
+                '[class*="dialog"] [class*="cancel"]',
+                '[class*="modal"] [class*="cancel"]',
+                '.layui-layer-close',
+                '[class*="layer"] [class*="close"]',
+                '[class*="closeBtn"]',
+                '[class*="btn-close"]',
+                'button:contains("关闭")',
+                'button:contains("取消")',
+                // 直接点蒙层关闭
+                '[class*="mask"]',
+                '[class*="overlay"]',
+            ];
+
+            closeSelectors.forEach(sel => {
+                try {
+                    const els = document.querySelectorAll(sel);
+                    els.forEach(el => {
+                        if (el.offsetParent !== null) {
+                            el.click();
+                        }
+                    });
+                } catch(e) {}
+            });
+
+            // 勾选所有同意复选框
+            document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                if (!cb.checked && cb.offsetParent !== null) {
+                    cb.checked = true;
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+
+            // 点击确认按钮
+            document.querySelectorAll('[class*="submit"],[class*="confirm"],[class*="primary"]').forEach(btn => {
+                if (btn.offsetParent !== null) {
+                    setTimeout(() => btn.click(), 100);
+                }
+            });
         },
 
         // 主运行循环
@@ -336,8 +419,16 @@
 
                 this.addLog(`📋 本页找到 ${jobs.length} 个岗位`, 'info');
 
-                for (const job of jobs) {
+                for (let idx = 0; idx < jobs.length; idx++) {
                     if (!this.running || this.completed >= this.target) break;
+
+                    const job = jobs[idx];
+
+                    // 滚动到当前岗位位置（确保可见）
+                    try {
+                        job.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        await delay(300);
+                    } catch(e) {}
 
                     const info = this.getJobInfo(job);
                     if (!info.name) continue;
@@ -347,16 +438,16 @@
 
                     if (result.success) {
                         this.addLog(`✅ [${this.completed}/${this.target}] ${info.name} (${match.score}%)`, 'success');
-                    } else {
-                        if (result.reason !== '已投递过') {
-                            // 只记录非重复的跳过
-                        }
                     }
 
                     // 更新UI
                     updateUI(this);
                     await delay(CONFIG.batchInterval);
                 }
+
+                // 翻页前先清理弹窗
+                this.closeAllDialogs();
+                await delay(500);
 
                 // 翻页
                 if (this.running && this.completed < this.target && CONFIG.autoNextPage) {
@@ -365,7 +456,6 @@
                         this.addLog('📭 已到最后一页', 'info');
                         break;
                     }
-                    this.addLog('📄 翻到下一页', 'info');
                 } else {
                     break;
                 }
