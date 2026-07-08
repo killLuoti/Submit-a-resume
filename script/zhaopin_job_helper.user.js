@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v5.0
 // @namespace    http://tampermonkey.net/
-// @version      5.0
-// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化
+// @version      5.1
+// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化（修复公司去重bug）
 // @author       罗启盛求职助手
 // @match        https://www.zhaopin.com/*
 // @match        https://sou.zhaopin.com/*
@@ -293,19 +293,24 @@
     }
 
     // ---- 已投递记录 ----
+    // 去重键使用「岗位名+公司名」而不是仅岗位名，避免不同公司发布同名岗位时被误判为重复
+    function makeJobKey(name, company) { return `${name}__${company || ''}`; }
     function getApplied() {
         try { return JSON.parse(GM_getValue('zpm_applied_set', '[]')); } catch { return []; }
     }
     function saveAppliedRecord(name, company, score, matched) {
         if (!CONFIG.saveApplied) return;
         const list = getApplied();
-        if (!list.find(x => x.name === name)) {
+        const key = makeJobKey(name, company);
+        if (!list.find(x => makeJobKey(x.name, x.company) === key)) {
             list.push({ name, company: company || '', score: score || 0, matched: matched || [], time: new Date().toISOString() });
             GM_setValue('zpm_applied_set', JSON.stringify(list));
         }
     }
-    function isApplied(name) {
-        return CONFIG.saveApplied && getApplied().some(x => x.name === name);
+    function isApplied(name, company) {
+        if (!CONFIG.saveApplied) return false;
+        const key = makeJobKey(name, company);
+        return getApplied().some(x => makeJobKey(x.name, x.company) === key);
     }
 
     // ---- 每日限额 ----
@@ -385,16 +390,27 @@
     }
 
     // ---- 经验要求解析 ----
+    // 优先在"经验"关键词附近截取一小段文本再解析，减少被无关数字（薪资、地址等）误命中的概率
     function parseExperienceRequirement(text) {
         if (!text) return null;
-        if (text.includes('经验不限') || text.includes('不限经验')) return { min: 0, max: 99 };
-        if (text.includes('应届') || text.includes('无经验')) return { min: 0, max: 0 };
-        let m = text.match(/(\d+)\s*[-~到至]\s*(\d+)\s*年/);
+        const idx = text.indexOf('经验');
+        const scope = idx >= 0 ? text.slice(Math.max(0, idx - 6), idx + 14) : text;
+
+        if (scope.includes('经验不限') || scope.includes('不限经验')) return { min: 0, max: 99 };
+        if (scope.includes('应届') || scope.includes('无经验')) return { min: 0, max: 0 };
+
+        let m = scope.match(/(\d+)\s*[-~到至]\s*(\d+)\s*年/);
         if (m) return { min: parseInt(m[1]), max: parseInt(m[2]) };
-        m = text.match(/(\d+)\s*年以上/);
+        m = scope.match(/(\d+)\s*年以上/);
         if (m) return { min: parseInt(m[1]), max: 99 };
-        m = text.match(/(\d+)\s*年以下/);
+        m = scope.match(/(\d+)\s*年以下/);
         if (m) return { min: 0, max: parseInt(m[1]) };
+
+        // 兜底：全文匹配（应对"经验"关键词与年限描述距离较远的排版）
+        if (idx < 0) {
+            m = text.match(/(\d+)\s*[-~到至]\s*(\d+)\s*年经验/) || text.match(/(\d+)\s*[-~到至]\s*(\d+)\s*年/);
+            if (m) return { min: parseInt(m[1]), max: parseInt(m[2]) };
+        }
         return null;
     }
     function experienceOk(text) {
@@ -436,7 +452,7 @@
     // ---- 统一的岗位合规性判断（供所有平台引擎复用）----
     function evaluateJob(name, company, fullText, cityText) {
         if (!name) return { ok: false, reason: '解析失败' };
-        if (isApplied(name)) return { ok: false, reason: '已投递过', skipType: 'applied' };
+        if (isApplied(name, company)) return { ok: false, reason: '已投递过', skipType: 'applied' };
         if (remainingToday() <= 0) return { ok: false, reason: '今日限额已用完', hitLimit: true };
         if (isBlacklisted(name, company, fullText)) return { ok: false, reason: '命中黑名单', skipType: 'blacklist' };
         if (hasNegativeSignal(fullText)) return { ok: false, reason: '命中风险关键词', skipType: 'blacklist' };
@@ -1301,7 +1317,7 @@
             if (isBlacklisted(name, company, text) || hasNegativeSignal(text)) {
                 card.classList.add('zpm-job-blacklist');
             }
-            if (name && isApplied(name)) {
+            if (name && isApplied(name, company)) {
                 card.classList.add('zpm-job-applied');
                 const badge = document.createElement('span');
                 badge.dataset.zpmAppliedBadge = '1';
