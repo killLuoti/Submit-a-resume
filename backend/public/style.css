@@ -1,0 +1,115 @@
+/* style.css — 岗位投递管理后台
+   设计基调："操作台" 风格：深蓝黑背景 + 单一品牌蓝 #165DFF（延续油猴脚本面板的品牌色）
+   数据用等宽字体呈现（强调这是一个数据/日志驱动的工具面板），标签用系统无衬线字体。
+*/
+
+:root {
+    --bg: #0c1018;
+    --surface: #141b28;
+    --surface-2: #1b2432;
+    --border: #232d3d;
+    --text: #e7ebf3;
+    --text-dim: #7c8aa3;
+    --accent: #165dff;
+    --accent-soft: rgba(22, 93, 255, 0.15);
+    --good: #52c41a;
+    --warn: #faad14;
+    --bad: #ff4d4f;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+}
+
+a { color: var(--accent); }
+
+.shell { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
+
+/* ---- 顶部条 ---- */
+.topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 10px; }
+.topbar .brand { display: flex; align-items: baseline; gap: 10px; }
+.topbar .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); display:inline-block; box-shadow: 0 0 8px var(--good); }
+.topbar h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
+.topbar .sub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.topbar .tabs { display: flex; gap: 4px; }
+.topbar .tab-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    padding: 6px 14px; border-radius: 7px; font-size: 12px; cursor: pointer; font-family: var(--sans);
+}
+.topbar .tab-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+
+/* ---- 统计条：大号等宽数字 ---- */
+.stat-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+.stat-card .label { font-size: 11px; color: var(--text-dim); margin-bottom: 6px; letter-spacing: 0.3px; }
+.stat-card .value { font-family: var(--mono); font-size: 26px; font-weight: 600; color: var(--text); }
+.stat-card .value.accent { color: var(--accent); }
+.stat-card .value.good { color: var(--good); }
+
+/* ---- 面板通用 ---- */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+.panel h2 { font-size: 13px; font-weight: 600; margin: 0 0 14px; color: var(--text); display:flex; align-items:center; gap:8px; }
+.panel h2 .tag { font-family: var(--mono); font-size: 10px; color: var(--text-dim); font-weight: 400; }
+
+.charts-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+canvas { width: 100% !important; }
+
+/* ---- 活动日志（签名元素：呼应脚本面板的日志流）---- */
+.activity-log { font-family: var(--mono); font-size: 12px; max-height: 260px; overflow-y: auto; }
+.activity-log .row { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.activity-log .row:last-child { border-bottom: none; }
+.activity-log .t { color: var(--text-dim); flex-shrink: 0; width: 92px; }
+.activity-log .score { flex-shrink: 0; width: 42px; color: var(--good); }
+.activity-log .name { color: var(--text); flex: 1; }
+.activity-log .company { color: var(--text-dim); flex-shrink: 0; }
+.activity-log .del { cursor: pointer; color: var(--bad); opacity: 0.6; flex-shrink: 0; }
+.activity-log .del:hover { opacity: 1; }
+
+/* ---- 表格筛选 ---- */
+.filter-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.filter-row input, .filter-row select {
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    padding: 7px 10px; border-radius: 7px; font-size: 12px; font-family: var(--sans);
+}
+.filter-row input[type=text] { flex: 1; min-width: 160px; }
+
+/* ---- 技能频率条 ---- */
+.skill-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; }
+.skill-name { width: 100px; flex-shrink: 0; text-align: right; color: var(--text-dim); }
+.skill-track { flex: 1; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.skill-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--good)); }
+.skill-count { width: 26px; font-family: var(--mono); color: var(--text-dim); }
+
+/* ---- 配置表单 ---- */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-group { margin-bottom: 4px; }
+.form-group label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 5px; }
+.form-group input[type=text], .form-group textarea, .form-group input[type=number] {
+    width: 100%; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text); padding: 8px 10px; border-radius: 7px; font-size: 12px; font-family: var(--sans);
+}
+.form-group textarea { resize: vertical; min-height: 44px; }
+.form-actions { margin-top: 14px; }
+.btn {
+    background: var(--accent); color: #fff; border: none; padding: 9px 18px;
+    border-radius: 7px; font-size: 13px; cursor: pointer; font-weight: 600;
+}
+.btn:hover { filter: brightness(1.1); }
+.btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+
+.empty-state { color: var(--text-dim); font-family: var(--mono); font-size: 12px; text-align: center; padding: 24px 0; }
+
+.footer-note { text-align: center; font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 30px; }
+
+@media (max-width: 760px) {
+    .stat-strip { grid-template-columns: repeat(2, 1fr); }
+    .charts-row { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+}

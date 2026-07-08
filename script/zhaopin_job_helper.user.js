@@ -1,8 +1,10 @@
 // ==UserScript==
-// @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v5.0
+// @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v6.0
 // @namespace    http://tampermonkey.net/
-// @version      5.1
-// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化（修复公司去重bug）
+// @version      6.0
+// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台
+// @connect      127.0.0.1
+// @connect      localhost
 // @author       罗启盛求职助手
 // @match        https://www.zhaopin.com/*
 // @match        https://sou.zhaopin.com/*
@@ -50,6 +52,10 @@
         soundEnabled: true,
         notifyOnDone: true,
         resumeBannerEnabled: true,
+
+        // 可选：同步投递记录到本地管理后台（见 backend/ 目录），默认关闭
+        syncEnabled: false,
+        backendUrl: 'http://127.0.0.1:8787/api',
 
         greetingTemplate: '您好，我有4年IT技术支持/运维经验，看到贵司该岗位与我的技能比较匹配，希望有机会进一步沟通，谢谢！',
 
@@ -281,6 +287,43 @@
     function notifyDone(text) {
         if (!CONFIG.notifyOnDone) return;
         try { GM_notification({ title: '🤖 自动投递助手', text, timeout: 6000 }); } catch (e) {}
+    }
+
+    // ---- 同步投递记录到本地管理后台（可选，失败不影响主流程）----
+    function pushToBackend(record, platformName) {
+        if (!CONFIG.syncEnabled || !CONFIG.backendUrl) return;
+        try {
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: CONFIG.backendUrl.replace(/\/$/, '') + '/applications',
+                headers: { 'Content-Type': 'application/json' },
+                data: JSON.stringify({
+                    name: record.name,
+                    company: record.company,
+                    score: record.score,
+                    matched: record.matched,
+                    platform: platformName,
+                    city: record.city || '',
+                    time: new Date().toISOString(),
+                }),
+                timeout: 5000,
+                onerror: () => console.warn('🤖 后台同步失败（后台可能未启动，可忽略）'),
+                ontimeout: () => console.warn('🤖 后台同步超时（后台可能未启动，可忽略）'),
+            });
+        } catch (e) { /* 同步失败不影响主投递流程 */ }
+    }
+
+    function testBackendConnection(url, cb) {
+        try {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url.replace(/\/$/, '') + '/stats/overview',
+                timeout: 4000,
+                onload: (res) => cb(res.status >= 200 && res.status < 300, res.status),
+                onerror: () => cb(false),
+                ontimeout: () => cb(false),
+            });
+        } catch (e) { cb(false); }
     }
 
     function findButtonByText(container, keywords) {
@@ -576,6 +619,7 @@
                         this.closeAllDialogs();
                         saveAppliedRecord(jobInfo.name, jobInfo.company, match.score, match.matched);
                         recordHistory(match.score);
+                        pushToBackend({ name: jobInfo.name, company: jobInfo.company, score: match.score, matched: match.matched, city: jobInfo.city }, this.name);
                         this.completed++;
                         incrementDaily();
                         this.lastScores.push(match.score);
@@ -838,6 +882,7 @@
                     this.lastScores.push(match.score);
                     saveAppliedRecord(name, company, match.score, match.matched);
                     recordHistory(match.score);
+                    pushToBackend({ name, company, score: match.score, matched: match.matched, city: jobLocation }, this.name);
                     saveRunState(this.name, this.target, this.completed);
                     this.addLog(`✅ [${this.completed}/${this.target}] ${name} (${match.score}%)`, 'success');
                     beep(880, 100);
@@ -900,6 +945,7 @@
             <div class="header" id="zpm-v5-drag">
                 <h3>🤖 ${engine.name}自动投递</h3>
                 <div class="header-actions">
+                    <span class="icon-btn" id="zpm-v5-dashboard" title="打开管理后台">🌐</span>
                     <span class="icon-btn" id="zpm-v5-stats" title="统计图表">📊</span>
                     <span class="icon-btn" id="zpm-v5-settings" title="设置">⚙️</span>
                     <span class="icon-btn" id="zpm-v5-export" title="导出投递记录 CSV">📥</span>
@@ -958,11 +1004,16 @@
                     <div style="color:#999;text-align:center;padding:20px 0;">等待启动...</div>
                 </div>
             </div>
-            <div class="zpm-footer">v5.0 · 经验/红旗关键词过滤 · 断点续投 · 快捷键 Alt+S</div>
+            <div class="zpm-footer">v6.0 · 经验/红旗关键词过滤 · 断点续投 · 可选同步后台 · 快捷键 Alt+S</div>
         `;
         document.body.appendChild(panel);
 
         document.getElementById('zpm-v5-close').onclick = () => panel.remove();
+        document.getElementById('zpm-v5-dashboard').onclick = () => {
+            const base = (CONFIG.backendUrl || '').replace(/\/api\/?$/, '');
+            if (!base) { toast('请先在设置里填写后台地址', 'error'); return; }
+            window.open(base, '_blank');
+        };
         document.getElementById('zpm-v5-export').onclick = exportCsv;
         document.getElementById('zpm-v5-settings').onclick = openSettingsModal;
         document.getElementById('zpm-v5-stats').onclick = openStatsModal;
@@ -1212,6 +1263,19 @@
                 </div>
 
                 <div class="zpm-set-group">
+                    <label>管理后台同步（可选）</label>
+                    <div class="zpm-set-checkbox">
+                        <input type="checkbox" id="zpm-set-sync" ${CONFIG.syncEnabled ? 'checked' : ''}>
+                        <label style="margin:0;font-weight:400;">投递成功后同步记录到本地管理后台</label>
+                    </div>
+                    <div class="zpm-set-row">
+                        <div style="flex:2;"><input type="text" id="zpm-set-backend-url" value="${CONFIG.backendUrl}"></div>
+                        <div><button type="button" class="zpm-mini-btn" id="zpm-set-test-conn" style="margin-top:0;">测试连接</button></div>
+                    </div>
+                    <div class="zpm-set-hint">需要先按 backend/README.md 启动本地后台服务（node server.js）</div>
+                </div>
+
+                <div class="zpm-set-group">
                     <label>技能库（JSON，weight 权重 1-10，category 分类）</label>
                     <textarea id="zpm-set-skills" style="min-height:120px;">${JSON.stringify(CONFIG.skills, null, 2)}</textarea>
                     <div class="zpm-set-hint">格式: {"Python": {"weight": 8, "category": "开发"}}</div>
@@ -1226,6 +1290,15 @@
         document.body.appendChild(mask);
         mask.addEventListener('click', e => { if (e.target === mask) mask.remove(); });
         document.getElementById('zpm-set-cancel-btn').onclick = () => mask.remove();
+
+        document.getElementById('zpm-set-test-conn').onclick = () => {
+            const url = document.getElementById('zpm-set-backend-url').value.trim();
+            if (!url) { toast('请先填写后台地址', 'error'); return; }
+            toast('正在连接...', 'info', 1500);
+            testBackendConnection(url, (ok) => {
+                toast(ok ? '✅ 连接成功' : '❌ 连接失败，请确认后台已启动', ok ? 'success' : 'error', 3000);
+            });
+        };
 
         document.getElementById('zpm-set-save-btn').onclick = () => {
             try {
@@ -1251,6 +1324,8 @@
                 CONFIG.soundEnabled = document.getElementById('zpm-set-sound').checked;
                 CONFIG.notifyOnDone = document.getElementById('zpm-set-notify').checked;
                 CONFIG.resumeBannerEnabled = document.getElementById('zpm-set-resume').checked;
+                CONFIG.syncEnabled = document.getElementById('zpm-set-sync').checked;
+                CONFIG.backendUrl = document.getElementById('zpm-set-backend-url').value.trim();
                 CONFIG.skills = skillsJson;
 
                 saveConfig(CONFIG);

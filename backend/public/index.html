@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>投递管理后台 · Job Helper</title>
+<link rel="stylesheet" href="style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="shell">
+
+    <div class="topbar">
+        <div class="brand">
+            <span class="dot"></span>
+            <h1>投递管理后台</h1>
+            <span class="sub">job-helper · localhost:8787</span>
+        </div>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="overview">总览</button>
+            <button class="tab-btn" data-tab="records">投递记录</button>
+            <button class="tab-btn" data-tab="config">投递策略</button>
+        </div>
+    </div>
+
+    <!-- ============ 总览 ============ -->
+    <div id="tab-overview">
+        <div class="stat-strip">
+            <div class="stat-card"><div class="label">累计投递</div><div class="value accent" id="stat-total">–</div></div>
+            <div class="stat-card"><div class="label">今日投递</div><div class="value good" id="stat-today">–</div></div>
+            <div class="stat-card"><div class="label">平均匹配度</div><div class="value" id="stat-avg">–</div></div>
+            <div class="stat-card"><div class="label">覆盖平台数</div><div class="value" id="stat-platforms">–</div></div>
+        </div>
+
+        <div class="charts-row">
+            <div class="panel">
+                <h2>近14天投递趋势 <span class="tag">daily trend</span></h2>
+                <canvas id="chart-daily" height="200"></canvas>
+            </div>
+            <div class="panel">
+                <h2>平台分布 <span class="tag">by platform</span></h2>
+                <canvas id="chart-platform" height="200"></canvas>
+            </div>
+        </div>
+
+        <div class="charts-row">
+            <div class="panel">
+                <h2>最近投递活动 <span class="tag">live feed</span></h2>
+                <div class="activity-log" id="activity-log"><div class="empty-state">暂无数据</div></div>
+            </div>
+            <div class="panel">
+                <h2>高频匹配技能 <span class="tag">top 10</span></h2>
+                <div id="skill-list"><div class="empty-state">暂无数据</div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 投递记录 ============ -->
+    <div id="tab-records" style="display:none;">
+        <div class="panel">
+            <h2>投递记录</h2>
+            <div class="filter-row">
+                <input type="text" id="filter-q" placeholder="搜索岗位名 / 公司名">
+                <select id="filter-platform">
+                    <option value="">全部平台</option>
+                </select>
+                <select id="filter-score">
+                    <option value="0">全部匹配度</option>
+                    <option value="30">≥30%</option>
+                    <option value="50">≥50%</option>
+                    <option value="70">≥70%</option>
+                </select>
+                <button class="btn ghost" id="filter-refresh">刷新</button>
+                <button class="btn" id="export-csv-btn">导出 CSV</button>
+            </div>
+            <div class="activity-log" id="records-table" style="max-height:520px;">
+                <div class="empty-state">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 投递策略配置 ============ -->
+    <div id="tab-config" style="display:none;">
+        <div class="panel">
+            <h2>投递策略 <span class="tag">与脚本设置面板双向同步（需脚本开启"同步到后台"）</span></h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>目标城市</label>
+                    <input type="text" id="cfg-city">
+                </div>
+                <div class="form-group">
+                    <label>每日投递上限</label>
+                    <input type="number" id="cfg-daily-limit">
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>岗位关键词（逗号分隔）</label>
+                    <textarea id="cfg-keywords"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>黑名单关键词（逗号分隔）</label>
+                    <textarea id="cfg-black-kw"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>黑名单公司（逗号分隔）</label>
+                    <textarea id="cfg-black-co"></textarea>
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>风险/红旗关键词（逗号分隔）</label>
+                    <textarea id="cfg-negative"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>期望薪资下限（元）</label>
+                    <input type="number" id="cfg-sal-low">
+                </div>
+                <div class="form-group">
+                    <label>期望薪资上限（元）</label>
+                    <input type="number" id="cfg-sal-high">
+                </div>
+                <div class="form-group">
+                    <label>我的工作年限</label>
+                    <input type="number" id="cfg-my-years">
+                </div>
+                <div class="form-group">
+                    <label>可接受经验超出年限</label>
+                    <input type="number" id="cfg-exp-gap">
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn" id="cfg-save-btn">保存策略</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer-note">job-helper backend v1.0 · 数据保存在本地 data/ 目录 JSON 文件中，未上传任何第三方服务器</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
