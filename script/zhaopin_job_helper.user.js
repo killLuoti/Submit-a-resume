@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v6.0
+// @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v7.0
 // @namespace    http://tampermonkey.net/
-// @version      6.0
-// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台
+// @version      7.0
+// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（全平台代码审查合并：修复弹窗自动确认误触发页面导航锚点的共享代码缺陷，弹窗内复选框/确认按钮改为限定容器范围点击，统一岗位卡片查找与去重逻辑，猎聘配置补齐投递按钮关键词校验）
 // @connect      127.0.0.1
 // @connect      localhost
 // @author       罗启盛求职助手
@@ -326,13 +326,96 @@
         } catch (e) { cb(false); }
     }
 
+    // 根据文本关键词查找按钮。优先找<button>/<div>，跳过<a>链接以防止页面跳转。
+    // 如果找不到非链接按钮，再用<a>兜底（但会标记为链接类型）。
     function findButtonByText(container, keywords) {
-        const candidates = container.querySelectorAll('button, a, div[class*="btn"], span[class*="btn"]');
+        const isVisible = el => el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden';
+        const hasKeyword = el => {
+            const text = (el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+            return text && keywords.some(k => text.includes(k));
+        };
+        const isDisabled = el => el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className).includes('disabled');
+
+        // 第一轮：只找<button>和<div/span>按钮元素，排除<a>链接
+        const preferred = container.querySelectorAll('button, [role="button"], div[class*="btn"], span[class*="btn"], div[class*="apply"], span[class*="apply"], div[class*="delivery"], span[class*="delivery"]');
+        for (const el of preferred) {
+            if (hasKeyword(el) && isVisible(el) && !isDisabled(el)) return el;
+        }
+        // 第二轮：<a>标签兜底，但只在不可跳过时才使用（此处仅返回，调用方会检测）
+        const anchorFallback = container.querySelectorAll('a');
+        for (const el of anchorFallback) {
+            if (hasKeyword(el) && isVisible(el) && !isDisabled(el)) return el;
+        }
+        // 第三轮：任何剩余元素
+        const candidates = container.querySelectorAll('*');
         for (const el of candidates) {
-            const t = (el.textContent || '').trim();
-            if (t && keywords.some(k => t.includes(k)) && el.offsetParent !== null) return el;
+            if (hasKeyword(el) && isVisible(el) && !isDisabled(el) &&
+                ['button','a','div','span','input'].includes(el.tagName.toLowerCase())) return el;
         }
         return null;
+    }
+
+    function findApplyButton(container, selectors, keywords, requireKeyword = false) {
+        const isVisible = el => el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden';
+        const isDisabled = el => el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className).includes('disabled');
+        const hasKeyword = el => {
+            const text = (el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+            return text && keywords.some(k => text.includes(k));
+        };
+
+        for (const sel of selectors) {
+            const matches = container.querySelectorAll(sel);
+            for (const el of matches) {
+                if (isVisible(el) && !isDisabled(el) && (!requireKeyword || hasKeyword(el))) return el;
+            }
+        }
+        return findButtonByText(container, keywords);
+    }
+
+    function triggerHumanClick(el) {
+        if (!el) return;
+        const restoreAttrs = [];
+        if (el.tagName === 'A') {
+            const href = el.getAttribute('href');
+            const target = el.getAttribute('target');
+            if (href) {
+                restoreAttrs.push(() => el.setAttribute('href', href));
+                el.removeAttribute('href');
+            }
+            if (target) {
+                restoreAttrs.push(() => el.setAttribute('target', target));
+                el.removeAttribute('target');
+            }
+        }
+
+        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        const rect = el.getBoundingClientRect();
+        const clientX = rect.left + rect.width / 2;
+        const clientY = rect.top + rect.height / 2;
+        const eventView = el.ownerDocument?.defaultView || window;
+
+        if (typeof PointerEvent !== 'undefined') {
+            try {
+                ['pointerover', 'pointerenter', 'pointerdown', 'pointerup'].forEach(type => {
+                    el.dispatchEvent(new PointerEvent(type, {
+                        bubbles: true, cancelable: true, view: eventView,
+                        pointerType: 'mouse', pointerId: 1, isPrimary: true,
+                        clientX, clientY,
+                    }));
+                });
+            } catch (e) {
+                console.warn('🤖 PointerEvent 触发失败，已降级为 MouseEvent:', e.message);
+            }
+        }
+        ['mouseover', 'mouseenter', 'mousedown', 'mouseup'].forEach(type => {
+            el.dispatchEvent(new MouseEvent(type, {
+                bubbles: true, cancelable: true, view: eventView,
+                button: 0, buttons: type === 'mousedown' ? 1 : 0,
+                clientX, clientY,
+            }));
+        });
+        if (typeof el.click === 'function') el.click();
+        if (restoreAttrs.length > 0) setTimeout(() => restoreAttrs.forEach(fn => fn()), 200);
     }
 
     // ---- 已投递记录 ----
@@ -399,7 +482,7 @@
     function getRunState() {
         try {
             const s = JSON.parse(GM_getValue('zpm_run_state', '{}'));
-            if (s.ts && Date.now() - s.ts < 10 * 60 * 1000 && s.completed < s.target) return s;
+            if (s.ts && Date.now() - s.ts < 60 * 60 * 1000 && s.completed < s.target) return s;
         } catch (e) {}
         return null;
     }
@@ -536,16 +619,59 @@
             titleSelectors: ['.jobinfo__name', '[class*="job-name"]', 'a[class*="title"]'],
             citySelectors: ['.jobinfo__other-info-item span', '.jobinfo__other-info-item'],
             companySelectors: ['[class*="company-name"]', '[class*="companyName"]', 'a[class*="company"]'],
-            applyBtnSelectors: ['.collect-and-apply__btn', '[class*="apply"]', '[class*="deliver"]'],
+            // 注意：智联招聘的"立即投递"按钮在搜索结果页是<button>或<div>元素，不是<a>链接。
+            // 如果选择器失效，请用 F12 检查实际 class 名。
+            // 如果匹配到了<a>标签(岗位标题链接等)，点击会导致页面跳转，脚本就会中断！
+            applyBtnSelectors: [
+                'button.joblist-box__btn',
+                '.joblist-box__btn',
+                '.positionlist__item button',
+                '.joblist-box__item button',
+                '[class*="btn-apply"]',
+                '[class*="btn-deliver"]',
+                '[class*="deliver-btn"]',
+                '[class*="apply"]',
+                '[class*="delivery"]',
+                '[class*="deliver"]',
+                '.btn-primary',
+                'button[class*="btn"]',         // 优先匹配<button>元素
+                'div[class*="btn"]',            // 其次匹配<div>按钮
+                'span[class*="btn"]',
+                '.collect-and-apply__btn',      // 旧版类名保留
+            ],
+            // 智联招聘的投递按钮普遍使用这些关键词
+            applyButtonText: ['立即投递', '投递', '申请', '立即申请'],
         },
         job51: {
             name: '前程无忧',
             hostMatch: h => h.includes('51job'),
-            jobListSelectors: ['.joblist .e', '.j_joblist > div', '[class*="joblist"] > div', '.jobs-list-item'],
+            // 注意：51job 真实卡片容器是 .joblist-item-job-wrapper（内含标题、公司、投递按钮等全部信息）。
+            // 之前用 [class*="joblist"] > div 这类宽泛选择器会匹配到卡片内部多个嵌套 div（标题行、信息行等），
+            // 导致同一岗位被当成好几个不同岗位重复处理（重复徽章），且这些嵌套 div 内部找不到投递按钮。
+            jobListSelectors: [
+                '.joblist-item-job-wrapper',
+                '.joblist-item-job',
+                '.joblist .e', '.j_joblist > div', '.jobs-list-item',
+            ],
             titleSelectors: ['.jname', '[class*="jname"]', 'a[title]', '[class*="job-title"]'],
             citySelectors: ['.d.at', '[class*="area"]', '[class*="job-area"]'],
             companySelectors: ['.cname', '[class*="cname"]', '[class*="company-name"]'],
-            applyBtnSelectors: ['[class*="apply"]', '[class*="delivery"]'],
+            // 51job 的申请按钮是 <button class="btn apply ...">，已投递的会带 disabled 且文字变为"已申请"
+            applyBtnSelectors: [
+                'button.btn.apply',
+                '.joblist-item-right button',
+                'button[track-type="searchTrackButtonClick"]',
+                '[class*="btn"][class*="apply"]',
+                '[class*="apply"]', '[class*="delivery"]',
+            ],
+            applyButtonText: ['申请职位', '申请', '投递'],
+            // 51job 翻页按钮是 Element-Plus 的 .el-pagination .btn-next，图标按钮，内部没有文字（仅 <i> 图标字体），
+            // 常规的"按文字匹配下一页"逻辑永远匹配不到它，必须靠选择器直接定位。已到最后一页时按钮会带 disabled 属性。
+            nextPageSelectors: [
+                '.bottom-page .btn-next:not([disabled])',
+                '.el-pagination .btn-next:not([disabled])',
+                'button.btn-next:not([disabled])',
+            ],
         },
         liepin: {
             name: '猎聘',
@@ -554,7 +680,15 @@
             titleSelectors: ['.job-title-box .job-title-text', '[class*="job-title"]', '.job-title'],
             citySelectors: ['[class*="area"]', '.condition-content'],
             companySelectors: ['[class*="company-name"]', '.company-name'],
-            applyBtnSelectors: ['[class*="apply"]', '[class*="delivery"]'],
+            applyBtnSelectors: [
+                'button[class*="apply"]', 'div[class*="apply"]', 'span[class*="apply"]',
+                'button[class*="delivery"]', 'div[class*="delivery"]',
+                '[class*="btn-apply"]', '[class*="btn-delivery"]',
+                '[class*="apply"]', '[class*="delivery"]',
+            ],
+            // 注意：猎聘暂未拿到真实投递按钮的 HTML 样本核实，以下关键词为同类招聘平台的常见猜测，
+            // 若实际测试中出现"未找到投递按钮"，请按 51job 的排查方式抓取真实卡片 HTML 后再调整。
+            applyButtonText: ['投递简历', '立即沟通', '投递', '申请'],
         },
     };
 
@@ -571,11 +705,9 @@
             lastScores: [],
 
             getJobs() {
-                for (const sel of site.jobListSelectors) {
-                    const els = document.querySelectorAll(sel);
-                    if (els.length > 0) return Array.from(els);
-                }
-                return [];
+                // 与 processJobCards()/applyFilter() 共用同一份"查找岗位卡片+过滤嵌套重复元素"逻辑，
+                // 避免两处选择器/去重规则各自维护、逐渐产生差异（此前就是分别维护导致的重复计分问题的根源之一）。
+                return getSiteJobCards(site);
             },
 
             getJobInfo(jobEl) {
@@ -589,7 +721,9 @@
                 const nameEl = pick(site.titleSelectors);
                 const cityEl = pick(site.citySelectors);
                 const companyEl = pick(site.companySelectors);
-                const applyBtn = pick(site.applyBtnSelectors) || findButtonByText(jobEl, ['投递', '申请', '立即申请']);
+                // 优先用站点配置的关键词查找投递按钮
+                const btnKeywords = site.applyButtonText || ['投递', '申请', '立即申请'];
+                let applyBtn = findApplyButton(jobEl, site.applyBtnSelectors, btnKeywords, Boolean(site.applyButtonText));
                 return {
                     name: nameEl ? nameEl.textContent.trim() : '',
                     city: cityEl ? cityEl.textContent.trim() : '',
@@ -597,6 +731,19 @@
                     fullText: jobEl.textContent || '',
                     applyBtn,
                 };
+            },
+
+            // 检测元素是否为会导致页面跳转的<a>链接
+            _isNavLink(el) {
+                if (!el) return false;
+                if (el.tagName === 'A') {
+                    const text = (el.textContent || '').trim();
+                    if (['投递', '申请', '沟通'].some(k => text.includes(k))) return false;
+                    const href = el.getAttribute('href');
+                    // 空href、#、javascript: 不会导航，其他href会跳转
+                    if (href && href !== '#' && !href.startsWith('javascript:')) return true;
+                }
+                return false;
             },
 
             async applyOne(jobEl, jobInfo, match) {
@@ -609,14 +756,60 @@
                 }
 
                 jobEl.classList.add('zpm-job-highlight');
-                if (!jobInfo.applyBtn) return { success: false, reason: '未找到投递按钮' };
+                if (!jobInfo.applyBtn) {
+                    // 调试辅助：找不到投递按钮时，把该岗位卡片的 HTML 片段打到控制台
+                    try { console.warn(`🤖 [${site.name}] 未找到投递按钮，岗位卡片HTML片段：`, jobEl.outerHTML.slice(0, 800)); } catch (e) {}
+                    return { success: false, reason: '未找到投递按钮' };
+                }
+
+                // ===== 关键修复：检测是否错误匹配到了链接元素 =====
+                if (this._isNavLink(jobInfo.applyBtn)) {
+                    const href = jobInfo.applyBtn.getAttribute('href');
+                    console.warn(`🤖 [${site.name}] 检测到投递按钮是链接(<a href="${href}">)，点击会导致页面跳转，已跳过。`, 
+                        '这通常是 applyBtnSelectors 选择器失效导致的，请用 F12 检查实际按钮类名后修改脚本。');
+                    try { console.warn(`🤖 岗位卡片HTML：`, jobEl.outerHTML.slice(0, 800)); } catch (e) {}
+                    return { success: false, reason: '按钮是链接,会被跳转' };
+                }
+
+                // ===== beforeunload 守护：在点击前保存状态，防止页面意外跳转 =====
+                let navGuardFired = false;
+                const beforeUnloadHandler = () => {
+                    navGuardFired = true;
+                    saveRunState(this.name, this.target, this.completed);
+                };
+                window.addEventListener('beforeunload', beforeUnloadHandler);
 
                 let attempts = CONFIG.retryOnFail ? CONFIG.retryTimes : 1;
                 for (let i = 0; i < attempts; i++) {
                     try {
-                        jobInfo.applyBtn.click();
-                        await delay(jitter(800));
-                        this.closeAllDialogs();
+                        // 先保存记录（防止点击后页面跳转导致来不及保存）
+                        const appliedAlready = isApplied(jobInfo.name, jobInfo.company);
+                        if (!appliedAlready) {
+                            saveAppliedRecord(jobInfo.name, jobInfo.company, match.score, match.matched);
+                        }
+
+                        // 智联新版页面可能只响应 pointer 事件或原生 click，这里按真实鼠标点击顺序触发。
+                        triggerHumanClick(jobInfo.applyBtn);
+                        await delay(jitter(1200));
+
+                        // 如果触发了页面跳转，navGuardFired 会被 beforeunload 设为 true
+                        if (navGuardFired) {
+                            window.removeEventListener('beforeunload', beforeUnloadHandler);
+                            // 已保存状态，页面即将跳转，让 run() 循环自然结束
+                            return { success: true, reason: '已投递(页面将跳转)' };
+                        }
+
+                        // 检测按钮是否变为"已投递"（智联招聘会改变按钮文字）
+                        const btnTextAfter = (jobInfo.applyBtn.textContent || '').trim();
+                        if (btnTextAfter.includes('已投递') || btnTextAfter.includes('已申请')) {
+                            // 智联招聘已处理投递，但可能还有弹窗需要关闭
+                            this.closeAllDialogs();
+                        } else {
+                            this.closeAllDialogs();
+                            // 再等待一下，给弹窗动画一点时间
+                            await delay(jitter(500));
+                            this.closeAllDialogs();
+                        }
                         saveAppliedRecord(jobInfo.name, jobInfo.company, match.score, match.matched);
                         recordHistory(match.score);
                         pushToBackend({ name: jobInfo.name, company: jobInfo.company, score: match.score, matched: match.matched, city: jobInfo.city }, this.name);
@@ -625,9 +818,13 @@
                         this.lastScores.push(match.score);
                         this.lastProgressTime = Date.now();
                         saveRunState(this.name, this.target, this.completed);
+                        window.removeEventListener('beforeunload', beforeUnloadHandler);
                         return { success: true, reason: '已投递' };
                     } catch (e) {
-                        if (i === attempts - 1) return { success: false, reason: `点击失败: ${e.message}` };
+                        if (i === attempts - 1) {
+                            window.removeEventListener('beforeunload', beforeUnloadHandler);
+                            return { success: false, reason: `点击失败: ${e.message}` };
+                        }
                         await delay(500);
                     }
                 }
@@ -637,6 +834,28 @@
                 this.closeAllDialogs();
                 window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
                 await delay(jitter(800));
+
+                // 优先使用站点专属的翻页选择器（选择器已经足够精确，不要求按钮内有文字）。
+                // 这是为了兼容像 51job 这样用图标字体做"下一页"按钮、按钮内没有任何文本内容的分页组件——
+                // 纯文字匹配的通用逻辑永远无法命中这类按钮。
+                if (site.nextPageSelectors && site.nextPageSelectors.length > 0) {
+                    for (const sel of site.nextPageSelectors) {
+                        try {
+                            const btn = document.querySelector(sel);
+                            if (btn && btn.offsetParent !== null) {
+                                btn.click();
+                                this.addLog('📄 翻到下一页', 'info');
+                                await delay(jitter(2500));
+                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                                await delay(500);
+                                return true;
+                            }
+                        } catch (e) {}
+                    }
+                    // 如果配置了专属选择器但都没找到可点击的按钮，大概率已经是最后一页（按钮带 disabled 被 :not([disabled]) 排除），
+                    // 直接返回 false，不再继续走通用文字匹配兜底逻辑，避免误触发页面上其它含有"下一页"字样但无关的元素。
+                    return false;
+                }
 
                 const selectors = [
                     '.btn.soupager__btn:not([disabled])', '.soupager__btn:not([disabled])',
@@ -681,23 +900,104 @@
             },
 
             closeAllDialogs() {
+                const clickVisibleButtonByText = (selectors, keywords) => {
+                    for (const sel of selectors) {
+                        try {
+                            const buttons = document.querySelectorAll(sel);
+                            for (const btn of buttons) {
+                                const text = (btn.textContent || btn.value || btn.getAttribute('aria-label') || '').trim();
+                                if (btn.offsetParent !== null && keywords.some(k => text.includes(k))) {
+                                    btn.click();
+                                    return true;
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                    return false;
+                };
+
+                // 先处理智联可能出现的确认投递弹窗。
+                clickVisibleButtonByText([
+                    '.passport-dialog__confirm', '.dialog-confirm', '.modal-confirm',
+                    '.lp-modal-confirm', '.a-dialog button', '.ivu-modal button',
+                    '[class*="dialog"] button', '[class*="modal"] button', 'button.btn-primary',
+                ], ['确认', '确定', '投递', '提交', '继续']);
+
+                // 再关闭投递成功/申请成功弹窗。
+                clickVisibleButtonByText([
+                    '[class*="dialog"] [class*="close"]', '[class*="modal"] [class*="close"]',
+                    '[class*="popup"] [class*="close"]', '.dialog-close', '.modal-close',
+                    '.popup-close', '.icon-close', '.btn-close',
+                    'button[aria-label="关闭"]', 'button[aria-label="close"]',
+                ], ['关闭', '×', 'close', 'Close', '']);
+
                 const closeSelectors = [
                     '[class*="dialog"] [class*="close"]', '[class*="modal"] [class*="close"]', '[class*="popup"] [class*="close"]',
                     '[class*="dialog"] [class*="cancel"]', '[class*="modal"] [class*="cancel"]',
                     '.layui-layer-close', '[class*="layer"] [class*="close"]', '[class*="closeBtn"]', '[class*="btn-close"]',
                     '[class*="mask"]', '[class*="overlay"]',
+                    // 智联招聘特定弹窗选择器
+                    '.a-dialog__close', '[class*="dialog__close"]', '[class*="ivu-modal-close"]',
+                    '[class*="ivu-modal-wrap"] [class*="ivu-modal-close"]',
+                    '.zp-alert-box__header img', '[class*="zp-alert-box__btn_cancel"]',
+                    '[class*="zp-alert-box__btn"]',
+                    '.p_dialog-national__close',
+                    '.resume-multiple-area .mask',
+                    '.job-apply-workflow-close [class*="close"]',
+                    // 通用的关闭按钮
+                    '[aria-label="Close"]', '[aria-label="关闭"]',
                 ];
                 closeSelectors.forEach(sel => {
                     try { document.querySelectorAll(sel).forEach(el => { if (el.offsetParent !== null) el.click(); }); } catch (e) {}
                 });
-                document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                    if (!cb.checked && cb.offsetParent !== null) {
-                        cb.checked = true;
-                        cb.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
+                // 额外：点击遮罩层关闭（常用于智联招聘弹窗）
+                try {
+                    const masks = document.querySelectorAll('.a-modal, .ivu-modal-mask, [class*="modal-mask"]');
+                    masks.forEach(m => { if (m.offsetParent !== null) { m.click(); } });
+                } catch (e) {}
+                // 探测当前页面上"看起来像"弹窗/模态框的可见容器，后续的自动勾选、自动确认操作都限定在这些容器内部，
+                // 不再对整个页面生效——避免误触发列表页上无关的筛选复选框、分类链接等。
+                const dialogContainerSelectors = [
+                    '[class*="dialog"]', '[class*="modal"]', '[class*="popup"]',
+                    '[class*="layer"]', '[role="dialog"]', '[class*="a-dialog"]',
+                    '.el-dialog', '.el-message-box', '[class*="alert-box"]',
+                ];
+                const dialogContainers = [];
+                dialogContainerSelectors.forEach(sel => {
+                    try {
+                        document.querySelectorAll(sel).forEach(el => {
+                            if (el.offsetParent !== null && !dialogContainers.includes(el)) dialogContainers.push(el);
+                        });
+                    } catch (e) {}
                 });
-                document.querySelectorAll('[class*="submit"],[class*="confirm"],[class*="primary"]').forEach(btn => {
-                    if (btn.offsetParent !== null) setTimeout(() => btn.click(), 100);
+
+                // 自动勾选弹窗内的确认类复选框（如"同意投递协议"），限定在弹窗容器内部，不影响列表页的筛选复选框
+                dialogContainers.forEach(container => {
+                    try {
+                        container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                            if (!cb.checked && cb.offsetParent !== null) {
+                                cb.checked = true;
+                                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        });
+                    } catch (e) {}
+                });
+
+                // ===== 关键修复（原 bug）=====
+                // 之前这里用 document.querySelectorAll('[class*="submit"],[class*="confirm"],[class*="primary"]')
+                // 在整个页面范围内查找并点击，而不是限定在弹窗容器内部。由于很多平台的"提交/确认/主按钮"类名
+                // 与页面导航锚点（<a class="xxx-primary">之类的分类/筛选链接）共用相似的 class 命名模式，
+                // 导致这里误触发了并非弹窗内的<a>链接，页面被意外跳转，脚本随之中断（此问题最早在智联招聘上复现）。
+                // 修复方式：只在上面探测到的弹窗容器内部查找确认类按钮，并且明确排除<a>标签
+                // （无论它是否在弹窗内，都不通过这里点击，导航类操作一律不在自动确认范围内）。
+                dialogContainers.forEach(container => {
+                    try {
+                        const candidates = container.querySelectorAll('[class*="submit"],[class*="confirm"],[class*="primary"]');
+                        candidates.forEach(btn => {
+                            if (btn.tagName === 'A') return; // 绝不通过这里点击<a>标签，防止页面跳转
+                            if (btn.offsetParent !== null) setTimeout(() => btn.click(), 100);
+                        });
+                    } catch (e) {}
                 });
             },
 
@@ -709,6 +1009,16 @@
                 this.lastScores = [];
                 this.lastProgressTime = Date.now();
                 const runStartTime = Date.now();
+
+                // 检测是否在岗位搜索结果页（而不是详情页）
+                const jobs = this.getJobs();
+                if (jobs.length === 0) {
+                    this.addLog(`⚠ 未找到岗位列表 — 这可能是平台页面非搜索结果页，或者选择器不匹配`, 'error');
+                    this.addLog(`💡 请确保在岗位搜索结果页面运行脚本（sou.zhaopin.com 搜索列表页）`, 'info');
+                    this.running = false;
+                    updateUI(this);
+                    return;
+                }
 
                 this.addLog(`🚀 ${this.name} 自动投递启动`, 'info');
                 this.addLog(`📅 今日剩余额度: ${remainingToday()} / ${CONFIG.dailyLimit}`, 'info');
@@ -1004,7 +1314,7 @@
                     <div style="color:#999;text-align:center;padding:20px 0;">等待启动...</div>
                 </div>
             </div>
-            <div class="zpm-footer">v6.0 · 经验/红旗关键词过滤 · 断点续投 · 可选同步后台 · 快捷键 Alt+S</div>
+            <div class="zpm-footer">v7.0 · 经验/红旗关键词过滤 · 断点续投 · 可选同步后台 · 快捷键 Alt+S</div>
         `;
         document.body.appendChild(panel);
 
@@ -1020,10 +1330,18 @@
         document.getElementById('zpm-v5-refresh-cards').onclick = () => { processJobCards(true); toast('已重新计算匹配度', 'info'); };
 
         if (showResume) {
-            document.getElementById('zpm-v5-resume-btn').onclick = async () => {
+            // 续投按钮：手动点击继续
+            let resumeBtn = document.getElementById('zpm-v5-resume-btn');
+            resumeBtn.onclick = async () => {
                 panel.querySelector('.zpm-resume-banner')?.remove();
                 await engine.run(resumeState.target, resumeState.completed);
             };
+            // 自动续投：2秒后自动开始（防止页面刚加载时DOM未稳定）
+            setTimeout(() => {
+                if (document.getElementById('zpm-v5-resume-btn')) {
+                    document.getElementById('zpm-v5-resume-btn').click();
+                }
+            }, 2000);
         }
 
         let isDragging = false, ox, oy;
@@ -1354,18 +1672,25 @@
         return null;
     }
 
+    // 根据站点选择器找到岗位卡片，并过滤掉被其他匹配元素包含的嵌套元素，
+    // 只保留最外层卡片（否则同一岗位可能因选择器命中卡片内部多层 div 而被重复统计）
+    function getSiteJobCards(site) {
+        for (const sel of site.jobListSelectors) {
+            const els = Array.from(document.querySelectorAll(sel));
+            if (els.length > 0) {
+                return els.filter(el => !els.some(other => other !== el && other.contains(el)));
+            }
+        }
+        return [];
+    }
+
     function processJobCards(force = false) {
         let cards = [];
         if (location.host.includes('zhipin')) {
             cards = document.querySelectorAll('.job-card-box');
         } else {
             const site = getCurrentSite();
-            if (site) {
-                for (const sel of site.jobListSelectors) {
-                    const els = document.querySelectorAll(sel);
-                    if (els.length > 0) { cards = els; break; }
-                }
-            }
+            if (site) cards = getSiteJobCards(site);
         }
 
         cards.forEach(card => {
@@ -1409,12 +1734,7 @@
             cards = document.querySelectorAll('.job-card-box');
         } else {
             const site = getCurrentSite();
-            if (site) {
-                for (const sel of site.jobListSelectors) {
-                    const els = document.querySelectorAll(sel);
-                    if (els.length > 0) { cards = els; break; }
-                }
-            }
+            if (site) cards = getSiteJobCards(site);
         }
         cards.forEach(card => {
             const badge = card.querySelector('.zpm-badge');
@@ -1447,7 +1767,7 @@
         observer.observe(document.body, { childList: true, subtree: true });
 
         setTimeout(() => processJobCards(false), 1000);
-        console.log('🤖 自动投递助手 v5.0 已启动');
+        console.log('🤖 自动投递助手 v7.0 已启动');
         console.log(`📍 ${CONFIG.city} · 🎯 每日上限 ${CONFIG.dailyLimit} · 今日已投 ${getDailyStats().count}`);
         console.log('快捷键: Alt+S 启动/停止 · 面板 📊 查看统计 · ⚙️ 修改设置');
     }
