@@ -2105,5 +2105,42 @@
     "salary": "",
     "city": "佛山·顺德区",
     "time": "2026-07-10T07:53:16.086Z"
+  },
+  {
+    "id": "mren2chbq46y2u",
+    "name": "硬盘产品技术支持专员（朝九晚六）",
+    "company": "北京互联企信信息技术有限公司广东分公司",
+    "score": 5,
+    "matched": [
+      "技术支持"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·南海区",
+    "time": "2026-07-10T07:53:20.183Z"
+  },
+  {
+    "id": "mren2iiibpex53",
+    "name": "运维工程师",
+    "company": "广州市图之灵计算机技术有限公司",
+    "score": 4,
+    "matched": [
+      "交换机"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·顺德区",
+    "time": "2026-07-10T07:53:28.002Z"
+  },
+  {
+    "id": "mren2z1ysvu9sn",
+    "name": "华为HCS-IAAS驻场运维工程师",
+    "company": "广州市双照电子科技有限公司",
+    "score": 0,
+    "matched": [],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·南海区",
+    "time": "2026-07-10T07:53:49.436Z"
   }
 ]

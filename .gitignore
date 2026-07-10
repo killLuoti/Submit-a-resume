@@ -1,5 +1,6 @@
 node_modules/
-backend/data/*.json
+backend/data/config.json
 !backend/data/.gitkeep
+!backend/data/applications.json
 *.log
 .DS_Store
