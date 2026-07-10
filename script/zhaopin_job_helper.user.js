@@ -1,8 +1,13 @@
 // ==UserScript==
 // @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v7.0
 // @namespace    http://tampermonkey.net/
+<<<<<<< HEAD
 // @version      7.0
 // @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（全平台代码审查合并：修复弹窗自动确认误触发页面导航锚点的共享代码缺陷，弹窗内复选框/确认按钮改为限定容器范围点击，统一岗位卡片查找与去重逻辑，猎聘配置补齐投递按钮关键词校验）
+=======
+// @version      6.1
+// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（修复版本提示文本，新增投递按钮调试日志）
+>>>>>>> 8c36753a4abc77269df4966b7355482fb819a1ba
 // @connect      127.0.0.1
 // @connect      localhost
 // @author       罗启盛求职助手
@@ -955,6 +960,7 @@
                     const masks = document.querySelectorAll('.a-modal, .ivu-modal-mask, [class*="modal-mask"]');
                     masks.forEach(m => { if (m.offsetParent !== null) { m.click(); } });
                 } catch (e) {}
+<<<<<<< HEAD
                 // 探测当前页面上"看起来像"弹窗/模态框的可见容器，后续的自动勾选、自动确认操作都限定在这些容器内部，
                 // 不再对整个页面生效——避免误触发列表页上无关的筛选复选框、分类链接等。
                 const dialogContainerSelectors = [
@@ -969,6 +975,13 @@
                             if (el.offsetParent !== null && !dialogContainers.includes(el)) dialogContainers.push(el);
                         });
                     } catch (e) {}
+=======
+                document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    if (!cb.checked && cb.offsetParent !== null) {
+                        cb.checked = true;
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+>>>>>>> 8c36753a4abc77269df4966b7355482fb819a1ba
                 });
 
                 // 自动勾选弹窗内的确认类复选框（如"同意投递协议"），限定在弹窗容器内部，不影响列表页的筛选复选框
@@ -1767,7 +1780,11 @@
         observer.observe(document.body, { childList: true, subtree: true });
 
         setTimeout(() => processJobCards(false), 1000);
+<<<<<<< HEAD
         console.log('🤖 自动投递助手 v7.0 已启动');
+=======
+        console.log('🤖 自动投递助手 v6.0 已启动');
+>>>>>>> 8c36753a4abc77269df4966b7355482fb819a1ba
         console.log(`📍 ${CONFIG.city} · 🎯 每日上限 ${CONFIG.dailyLimit} · 今日已投 ${getDailyStats().count}`);
         console.log('快捷键: Alt+S 启动/停止 · 面板 📊 查看统计 · ⚙️ 修改设置');
     }

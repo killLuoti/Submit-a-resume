@@ -1972,5 +1972,138 @@
     "salary": "",
     "city": "佛山·南海区",
     "time": "2026-07-10T07:45:36.459Z"
+  },
+  {
+    "id": "mremsi706u9yvo",
+    "name": "驻场运维工程师（弱电/网络方向）",
+    "company": "广州市欣南信息科技有限公司",
+    "score": 5,
+    "matched": [
+      "网络运维"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·高明区",
+    "time": "2026-07-10T07:45:41.018Z"
+  },
+  {
+    "id": "mremskp27c0uxa",
+    "name": "售后",
+    "company": "",
+    "score": 5,
+    "matched": [
+      "技术支持"
+    ],
+    "platform": "Boss直聘",
+    "salary": "",
+    "city": "佛山·顺德区",
+    "time": "2026-07-10T07:45:44.258Z"
+  },
+  {
+    "id": "mremslsftb6ykl",
+    "name": "IOT前端运维岗",
+    "company": "小熊电器股份有限公司",
+    "score": 5,
+    "matched": [
+      "物联网"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·顺德区",
+    "time": "2026-07-10T07:45:45.678Z"
+  },
+  {
+    "id": "mremspjf52t7kj",
+    "name": "暖通技术支持",
+    "company": "广东盛樘综合能源服务有限公司",
+    "score": 5,
+    "matched": [
+      "技术支持"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·南海区",
+    "time": "2026-07-10T07:45:50.545Z"
+  },
+  {
+    "id": "mremst2ahnkn55",
+    "name": "软件实施工程师",
+    "company": "佛山市南海天富科技有限公司",
+    "score": 5,
+    "matched": [
+      "技术支持"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·南海区",
+    "time": "2026-07-10T07:45:55.098Z"
+  },
+  {
+    "id": "mremsteb8zdxzf",
+    "name": "IT技术支持",
+    "company": "",
+    "score": 10,
+    "matched": [
+      "网络运维",
+      "技术支持"
+    ],
+    "platform": "Boss直聘",
+    "salary": "",
+    "city": "佛山·南海区·罗村",
+    "time": "2026-07-10T07:45:55.549Z"
+  },
+  {
+    "id": "mremt1jt1ogr1h",
+    "name": "系统运维工程师",
+    "company": "广东健翔医院管理集团有限公司",
+    "score": 3,
+    "matched": [
+      "Java"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·禅城区",
+    "time": "2026-07-10T07:46:06.112Z"
+  },
+  {
+    "id": "mremtcs9ecb2kc",
+    "name": "技术支持工程师",
+    "company": "",
+    "score": 5,
+    "matched": [
+      "技术支持"
+    ],
+    "platform": "Boss直聘",
+    "salary": "",
+    "city": "佛山·南海区·罗村",
+    "time": "2026-07-10T07:46:20.671Z"
+  },
+  {
+    "id": "mren25f77263sr",
+    "name": "运维工程师",
+    "company": "广州南天电脑系统有限公司",
+    "score": 7,
+    "matched": [
+      "MySQL",
+      "SQL Server"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山",
+    "time": "2026-07-10T07:53:11.029Z"
+  },
+  {
+    "id": "mren29bec8h4uu",
+    "name": "系统运维工程师",
+    "company": "体必康生物科技（广东）股份有限公司",
+    "score": 7,
+    "matched": [
+      "MySQL",
+      "SQL Server"
+    ],
+    "platform": "前程无忧",
+    "salary": "",
+    "city": "佛山·顺德区",
+    "time": "2026-07-10T07:53:16.086Z"
   }
 ]
