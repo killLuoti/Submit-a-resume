@@ -1,6 +1,7 @@
 node_modules/
-backend/data/config.json
+backend/data/*.json
+backend/data/backups/
 !backend/data/.gitkeep
-!backend/data/applications.json
 *.log
 .DS_Store
+*.tmp

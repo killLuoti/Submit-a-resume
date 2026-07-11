@@ -71,6 +71,8 @@ canvas { width: 100% !important; }
 .activity-log .company { color: var(--text-dim); flex-shrink: 0; }
 .activity-log .del { cursor: pointer; color: var(--bad); opacity: 0.6; flex-shrink: 0; }
 .activity-log .del:hover { opacity: 1; }
+.activity-log .edit { cursor: pointer; color: var(--accent); opacity: 0.6; flex-shrink: 0; }
+.activity-log .edit:hover { opacity: 1; }
 
 /* ---- 表格筛选 ---- */
 .filter-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }

@@ -1,0 +1,11 @@
+# 个人投递数据 —— 包含真实公司名、岗位信息等隐私内容，绝不应该出现在公开仓库里。
+# 只忽略数据文件本身，data/ 目录结构通过 .gitkeep 保留，首次运行时 server.js 会自动重新生成这两个文件。
+data/applications.json
+data/config.json
+
+node_modules/
+npm-debug.log*
+*.tmp
+
+# 自动备份文件（见 src/db.js 的 backupBeforeWrite）
+data/backups/

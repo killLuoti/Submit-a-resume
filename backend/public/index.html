@@ -7,7 +7,15 @@
 <link rel="stylesheet" href="style.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"
+        onerror="
+          console.warn('⚠ cdnjs 加载 Chart.js 失败，尝试切换到 jsdelivr 备用CDN');
+          var s=document.createElement('script');
+          s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
+          s.onload=function(){ window.dispatchEvent(new Event('chartjs-ready')); };
+          s.onerror=function(){ console.error('⚠ jsdelivr 备用CDN 也加载失败，两个图表将无法显示，请检查网络连接'); };
+          document.head.appendChild(s);
+        "></script>
 </head>
 <body>
 <div class="shell">
@@ -133,7 +141,7 @@
         </div>
     </div>
 
-    <div class="footer-note">job-helper backend v1.0 · 数据保存在本地 data/ 目录 JSON 文件中，未上传任何第三方服务器</div>
+    <div class="footer-note">job-helper backend v1.1.0 · 数据保存在本地 data/ 目录 JSON 文件中，未上传任何第三方服务器</div>
 </div>
 
 <script src="app.js"></script>

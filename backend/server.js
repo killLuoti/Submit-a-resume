@@ -18,6 +18,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
+// ---- 统一错误处理 ----
+// 之前没有这一层：路由里任何同步抛出的异常或 asyncHandler 捕获到的 Promise 拒绝，
+// 都会导致 Express 返回默认的 HTML 错误页面（而不是 JSON），前端 fetch().json() 解析会直接报错，
+// 且看不出具体是哪里出的问题。现在统一转成结构化 JSON，并在终端打印详细堆栈方便排查。
+// 注意：express.json() 请求体解析失败（比如脚本传了格式错误的 JSON）抛出的 SyntaxError 也会走到这里。
+app.use((err, req, res, next) => {
+    console.error(`❌ [${req.method} ${req.originalUrl}] 请求处理出错:`, err);
+    if (err.type === 'entity.parse.failed') {
+        return res.status(400).json({ error: '请求体不是合法的 JSON' });
+    }
+    res.status(err.status || 500).json({ error: err.message || '服务器内部错误' });
+});
+
 app.listen(PORT, () => {
     console.log(`✅ 岗位投递管理后台已启动: http://localhost:${PORT}`);
     console.log(`📊 打开浏览器访问上面的地址查看统计面板`);

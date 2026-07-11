@@ -8,6 +8,8 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const APPLICATIONS_FILE = path.join(DATA_DIR, 'applications.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const MAX_BACKUPS = 20; // 最多保留最近20份自动备份，防止 backups/ 目录无限增长
 
 const DEFAULT_CONFIG = {
     city: '佛山',
@@ -21,8 +23,23 @@ const DEFAULT_CONFIG = {
     dailyLimit: 30,
 };
 
+// config 各字段的类型约束——PUT /config 时用来过滤/校验请求体，
+// 防止脚本或其它调用方传入错误类型的字段把 config.json 写坏（例如把数组字段传成字符串）。
+const CONFIG_SCHEMA = {
+    city: 'string',
+    jobKeywords: 'string[]',
+    blacklistKeywords: 'string[]',
+    blacklistCompanies: 'string[]',
+    negativeSignals: 'string[]',
+    expectedSalary: 'number[2]',
+    myYearsExperience: 'number',
+    maxExperienceGap: 'number',
+    dailyLimit: 'number',
+};
+
 function ensureDataFiles() {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
     if (!fs.existsSync(APPLICATIONS_FILE)) fs.writeFileSync(APPLICATIONS_FILE, '[]', 'utf-8');
     if (!fs.existsSync(CONFIG_FILE)) fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
 }
@@ -46,6 +63,27 @@ function writeJsonSync(file, data) {
     const tmp = file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
     fs.renameSync(tmp, file); // 原子替换，降低写入过程中崩溃导致文件损坏的概率
+}
+
+// 覆盖投递记录文件前先备份一份带时间戳的快照，防止某次写入逻辑出错把180+条历史投递记录写坏/写丢。
+// 只保留最近 MAX_BACKUPS 份，超出的自动清理最旧的。
+function backupBeforeWrite(file, label) {
+    try {
+        if (!fs.existsSync(file)) return;
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupPath = path.join(BACKUP_DIR, `${label}_${ts}.json`);
+        fs.copyFileSync(file, backupPath);
+
+        const backups = fs.readdirSync(BACKUP_DIR)
+            .filter(f => f.startsWith(`${label}_`))
+            .sort(); // 时间戳文件名天然按时间排序
+        while (backups.length > MAX_BACKUPS) {
+            fs.unlinkSync(path.join(BACKUP_DIR, backups.shift()));
+        }
+    } catch (e) {
+        // 备份失败不应阻塞主流程，仅记录日志
+        console.warn('⚠ 数据备份失败（不影响本次写入）:', e.message);
+    }
 }
 
 // ============================================================
@@ -78,8 +116,31 @@ function addApplication(record) {
             time: record.time || new Date().toISOString(),
         };
         list.push(newRecord);
+        backupBeforeWrite(APPLICATIONS_FILE, 'applications');
         writeJsonSync(APPLICATIONS_FILE, list);
         return { created: true, record: newRecord };
+    });
+}
+
+function updateApplication(id, patch) {
+    return serialize(() => {
+        const list = readApplications();
+        const idx = list.findIndex(x => x.id === id);
+        if (idx === -1) return null;
+
+        // 只允许更新这几个字段，防止调用方顺手改掉 id/time 等不该动的字段
+        const allowed = ['name', 'company', 'score', 'matched', 'platform', 'salary', 'city'];
+        const updated = { ...list[idx] };
+        for (const key of allowed) {
+            if (patch[key] === undefined) continue;
+            if (key === 'score' && typeof patch.score !== 'number') continue;
+            if (key === 'matched' && !Array.isArray(patch.matched)) continue;
+            updated[key] = patch[key];
+        }
+        list[idx] = updated;
+        backupBeforeWrite(APPLICATIONS_FILE, 'applications');
+        writeJsonSync(APPLICATIONS_FILE, list);
+        return updated;
     });
 }
 
@@ -89,6 +150,7 @@ function deleteApplication(id) {
         const idx = list.findIndex(x => x.id === id);
         if (idx === -1) return false;
         list.splice(idx, 1);
+        backupBeforeWrite(APPLICATIONS_FILE, 'applications');
         writeJsonSync(APPLICATIONS_FILE, list);
         return true;
     });
@@ -104,8 +166,9 @@ function queryApplications({ platform, minScore, q, limit, offset } = {}) {
     }
     list = list.sort((a, b) => new Date(b.time) - new Date(a.time));
     const total = list.length;
-    const off = Number(offset) || 0;
-    const lim = Number(limit) || 100;
+    const off = Math.max(0, Number(offset) || 0);
+    // 上限 5000，避免调用方误传超大 limit 导致一次性序列化过大响应
+    const lim = Math.min(5000, Math.max(1, Number(limit) || 100));
     return { total, items: list.slice(off, off + lim) };
 }
 
@@ -115,12 +178,40 @@ function queryApplications({ platform, minScore, q, limit, offset } = {}) {
 function readConfig() {
     return readJson(CONFIG_FILE, DEFAULT_CONFIG);
 }
+
+// 按 CONFIG_SCHEMA 过滤请求体：类型不对的字段直接丢弃（不写入），
+// 防止脚本或手工调用 API 时传错类型（比如把数组传成字符串）把 config.json 写坏，
+// 导致下次 writeConfig 的 readConfig() + Object.assign 基于一个已损坏的值继续叠加错误。
+function validateConfigPatch(input) {
+    const clean = {};
+    const rejected = [];
+    for (const [key, type] of Object.entries(CONFIG_SCHEMA)) {
+        if (!(key in input)) continue;
+        const val = input[key];
+        if (type === 'string' && typeof val === 'string') {
+            clean[key] = val;
+        } else if (type === 'string[]' && Array.isArray(val) && val.every(v => typeof v === 'string')) {
+            clean[key] = val;
+        } else if (type === 'number' && typeof val === 'number' && Number.isFinite(val)) {
+            clean[key] = val;
+        } else if (type === 'number[2]' && Array.isArray(val) && val.length === 2 && val.every(v => typeof v === 'number' && Number.isFinite(v))) {
+            clean[key] = val;
+        } else {
+            rejected.push(key);
+        }
+    }
+    return { clean, rejected };
+}
+
 function writeConfig(cfg) {
-    return serialize(() => {
-        const merged = Object.assign({}, readConfig(), cfg);
-        writeJsonSync(CONFIG_FILE, merged);
-        return merged;
+    const { clean, rejected } = validateConfigPatch(cfg || {});
+    const merged = serialize(() => {
+        const result = Object.assign({}, readConfig(), clean);
+        backupBeforeWrite(CONFIG_FILE, 'config');
+        writeJsonSync(CONFIG_FILE, result);
+        return result;
     });
+    return Promise.resolve(merged).then(result => ({ config: result, rejected }));
 }
 
 // ============================================================
@@ -168,9 +259,19 @@ function getSkillFrequency(topN = 10) {
         .map(([skill, count]) => ({ skill, count }));
 }
 
+function toCsv(list) {
+    const esc = s => `"${String(s || '').replace(/"/g, '""')}"`;
+    const header = '岗位名称,公司,平台,匹配度,匹配技能,城市,投递时间\n';
+    const rows = list.map(x =>
+        `${esc(x.name)},${esc(x.company)},${esc(x.platform)},${x.score || 0}%,${esc((x.matched || []).join('/'))},${esc(x.city)},${esc(x.time)}`
+    ).join('\n');
+    return '\uFEFF' + header + rows; // \uFEFF: 让 Excel 正确识别 UTF-8 编码，避免中文乱码
+}
+
 module.exports = {
     readApplications,
     addApplication,
+    updateApplication,
     deleteApplication,
     queryApplications,
     readConfig,
@@ -178,4 +279,5 @@ module.exports = {
     getOverviewStats,
     getDailyTrend,
     getSkillFrequency,
+    toCsv,
 };
