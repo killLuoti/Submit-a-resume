@@ -1,6 +1,7 @@
 node_modules/
 backend/data/*.json
 backend/data/backups/
+.vscode/settings.json
 !backend/data/.gitkeep
 *.log
 .DS_Store
