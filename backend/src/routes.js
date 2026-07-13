@@ -20,16 +20,16 @@ function asyncHandler(fn) {
 
 // ---- 投递记录 ----
 router.get('/applications', asyncHandler(async (req, res) => {
-    const { platform, minScore, q, limit, offset } = req.query;
-    const result = db.queryApplications({ platform, minScore, q, limit, offset });
+    const { platform, minScore, q, status, limit, offset } = req.query;
+    const result = db.queryApplications({ platform, minScore, q, status, limit, offset });
     res.json(result);
 }));
 
 // 服务端直出 CSV，方便命令行 curl 下载，或不想跑前端 JS 时也能拿到导出文件。
 // 注意：路由要放在 '/applications/:id' 之前，否则 'export.csv' 会被误当成 :id 参数匹配掉。
 router.get('/applications/export.csv', asyncHandler(async (req, res) => {
-    const { platform, minScore, q } = req.query;
-    const { items } = db.queryApplications({ platform, minScore, q, limit: 100000, offset: 0 });
+    const { platform, minScore, q, status } = req.query;
+    const { items } = db.queryApplications({ platform, minScore, q, status, limit: 100000, offset: 0 });
     const csv = db.toCsv(items);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="投递记录_${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -68,6 +68,16 @@ router.get('/stats/daily', asyncHandler(async (req, res) => {
 router.get('/stats/skills', asyncHandler(async (req, res) => {
     const topN = Number(req.query.top) || 10;
     res.json(db.getSkillFrequency(topN));
+}));
+
+router.get('/stats/funnel', asyncHandler(async (req, res) => {
+    res.json(db.getFunnelStats());
+}));
+
+// 暴露合法的状态取值列表，前端下拉框/状态选择器直接用这个渲染，不用在前端硬编码一份，
+// 以后要加新状态（比如"已婉拒"）只需要改 db.js 里的 ALL_STATUSES，前端自动跟着变。
+router.get('/meta/statuses', asyncHandler(async (req, res) => {
+    res.json({ stages: db.STAGE_ORDER, rejected: db.REJECTED_STATUS, all: db.ALL_STATUSES });
 }));
 
 // ---- 配置（黑名单/关键词/薪资等，可与脚本设置面板双向同步）----

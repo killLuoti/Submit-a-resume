@@ -57,6 +57,7 @@ a { color: var(--accent); }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
 .panel h2 { font-size: 13px; font-weight: 600; margin: 0 0 14px; color: var(--text); display:flex; align-items:center; gap:8px; }
 .panel h2 .tag { font-family: var(--mono); font-size: 10px; color: var(--text-dim); font-weight: 400; }
+.panel h2 .tag.bad { color: var(--bad); font-weight: 600; }
 
 .charts-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
 canvas { width: 100% !important; }
@@ -69,6 +70,15 @@ canvas { width: 100% !important; }
 .activity-log .score { flex-shrink: 0; width: 42px; color: var(--good); }
 .activity-log .name { color: var(--text); flex: 1; }
 .activity-log .company { color: var(--text-dim); flex-shrink: 0; }
+.activity-log .status-select {
+    flex-shrink: 0; font-family: var(--mono); font-size: 11px; padding: 2px 4px;
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+}
+.activity-log .status-select.st-applied { color: var(--text-dim); }
+.activity-log .status-select.st-replied { color: var(--accent); }
+.activity-log .status-select.st-interview { color: var(--warn); }
+.activity-log .status-select.st-offer { color: var(--good); }
+.activity-log .status-select.st-rejected { color: var(--bad); }
 .activity-log .del { cursor: pointer; color: var(--bad); opacity: 0.6; flex-shrink: 0; }
 .activity-log .del:hover { opacity: 1; }
 .activity-log .edit { cursor: pointer; color: var(--accent); opacity: 0.6; flex-shrink: 0; }

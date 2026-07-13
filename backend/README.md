@@ -2,6 +2,15 @@
 
 配合 `zhaopin_job_helper.user.js` v6.0+ 使用的本地管理与统计后台。数据保存在本地 `data/` 目录的 JSON 文件中，不依赖任何数据库，也不会把数据发送到任何第三方服务器。
 
+## 🆕 v1.2.0 更新（投递状态流转 + 转化漏斗）
+
+- **新增投递状态字段**：每条记录现在有 `status`，取值为「已投递 → 已回复 → 面试中 → offer」四个正向阶段之一，或终止态「已拒绝」。新记录默认「已投递」，「投递记录」页面每一行都有下拉框可以直接改状态。
+- **新增 `stageReached`（曾到达过的最远阶段）**：这是让漏斗统计准确的关键——如果一条记录曾经推进到"面试中"，后来才被标记「已拒绝」，`stageReached` 仍然保留"面试中"，不会因为拒绝而抹掉之前的进度。也就是说，漏斗图里"面试中"这一档的计数，包含了后来被拒的那些，能真实反映"到底有多少投递走到了面试这一步"。
+- **新增 `GET /api/stats/funnel`**：返回每个阶段的累计到达人数（到面试中的，也会计入已投递、已回复的计数）+ 已拒绝总数，总览页新增一个横向柱状图展示转化漏斗。
+- **新增 `GET /api/meta/statuses`**：返回合法的状态取值列表，前端下拉框直接用这个渲染，不在前端硬编码。
+- **状态可筛选/可导出**：`GET /api/applications`、CSV 导出都支持 `status` 参数筛选；投递记录页面新增"全部状态"下拉筛选框；CSV 也新增了"状态"这一列。
+- **向后兼容旧数据**：v1.2.0 之前创建、没有 `status`/`stageReached` 字段的历史记录，统计和展示时自动按「已投递」处理，不需要手动迁移数据。
+
 ## 🆕 v1.1.0 更新（完善与修复）
 
 - **修复接口返回值 bug**：`POST /applications`、`DELETE /applications/:id`、`PUT /config` 内部都通过串行写队列（Promise）落盘，但路由层之前没有 `await`，导致：
@@ -50,14 +59,16 @@ node server.js
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/applications` | 查询投递记录，支持 `platform` / `minScore` / `q`(搜索) / `limit`(≤5000) / `offset` |
+| GET | `/api/applications` | 查询投递记录，支持 `platform` / `minScore` / `status` / `q`(搜索) / `limit`(≤5000) / `offset` |
 | GET | `/api/applications/export.csv` | 服务端直出 CSV 下载，支持与上面相同的筛选参数 |
 | POST | `/api/applications` | 新增一条投递记录（脚本自动调用） |
-| PATCH | `/api/applications/:id` | 修正一条记录的部分字段（name/company/score/matched/platform/salary/city） |
+| PATCH | `/api/applications/:id` | 修正一条记录的部分字段（name/company/score/matched/platform/salary/city/status） |
 | DELETE | `/api/applications/:id` | 删除一条记录，记录不存在时返回 404 |
 | GET | `/api/stats/overview` | 总投递数、今日投递数、平均匹配度、平台分布 |
 | GET | `/api/stats/daily?days=14` | 按天统计投递数量 |
 | GET | `/api/stats/skills?top=10` | 高频匹配技能排行 |
+| GET | `/api/stats/funnel` | 投递转化漏斗：各阶段累计到达数 + 已拒绝总数 |
+| GET | `/api/meta/statuses` | 合法的投递状态取值列表 |
 | GET | `/api/config` | 读取投递策略配置 |
 | PUT | `/api/config` | 更新投递策略配置；响应体为 `{ config, rejected }`，`rejected` 列出因类型不对被丢弃的字段 |
 

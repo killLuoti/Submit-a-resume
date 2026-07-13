@@ -20,6 +20,22 @@ async function api(path, opts) {
     return res.json();
 }
 
+// ---- 投递状态元信息（v1.2.0）----
+// 合法状态取值由后端 db.js 的 ALL_STATUSES 决定，这里启动时拉一次并缓存，
+// 前端不再硬编码一份状态列表，以后加新状态只需要改后端。
+let STATUS_META = { stages: ['已投递', '已回复', '面试中', 'offer'], rejected: '已拒绝', all: ['已投递', '已回复', '面试中', 'offer', '已拒绝'] };
+async function loadStatusMeta() {
+    try {
+        STATUS_META = await api('/meta/statuses');
+    } catch (e) {
+        console.warn('获取状态元信息失败，使用前端内置的默认值:', e.message);
+    }
+    const sel = document.getElementById('filter-status');
+    if (sel) sel.innerHTML = '<option value="">全部状态</option>' + STATUS_META.all.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+}
+const STATUS_CSS_CLASS = { '已投递': 'st-applied', '已回复': 'st-replied', '面试中': 'st-interview', 'offer': 'st-offer', '已拒绝': 'st-rejected' };
+function statusClass(status) { return STATUS_CSS_CLASS[status] || 'st-applied'; }
+
 function fmtTime(iso) {
     if (!iso) return '';
     const d = new Date(iso);
@@ -30,14 +46,15 @@ function fmtTime(iso) {
 // ============================================================
 // 总览
 // ============================================================
-let dailyChart, platformChart;
+let dailyChart, platformChart, funnelChart;
 
 async function loadOverview() {
-    const [overview, daily, skills, recent] = await Promise.all([
+    const [overview, daily, skills, recent, funnel] = await Promise.all([
         api('/stats/overview'),
         api('/stats/daily?days=14'),
         api('/stats/skills?top=10'),
         api('/applications?limit=12'),
+        api('/stats/funnel'),
     ]);
 
     document.getElementById('stat-total').textContent = overview.total;
@@ -53,15 +70,46 @@ async function loadOverview() {
     // 另外，平台分布图在无数据时会用 outerHTML 直接把 <canvas> 整个替换成提示文字 div，
     // 这个 canvas 元素之后就永久消失了——如果 loadOverview() 之后又被调用一次（比如刷新逻辑），
     // 再去 getContext('2d') 会因为元素不存在而报错。这里也一并修复，改成显示/隐藏而不是删除元素。
+    document.getElementById('funnel-rejected-badge').textContent = `已拒绝 ${funnel.rejected}`;
+
     if (typeof Chart === 'undefined') {
         const msg = '⚠ 图表库(Chart.js)加载失败，通常是网络问题或被浏览器插件拦截。请检查网络后刷新页面（F12 控制台/网络面板可看到具体报错）。';
         console.error(msg);
-        ['chart-daily', 'chart-platform'].forEach(id => {
+        ['chart-daily', 'chart-platform', 'chart-funnel'].forEach(id => {
             const el = document.getElementById(id);
             const alreadyWarned = el && el.nextElementSibling && el.nextElementSibling.hasAttribute('data-chartjs-warning');
             if (el && !alreadyWarned) el.insertAdjacentHTML('afterend', `<div class="empty-state" data-chartjs-warning>${msg}</div>`);
         });
     } else {
+        // 转化漏斗（用横向柱状图模拟漏斗效果：阶段越靠后，柱子通常越短，直观体现转化率）
+        try {
+            const ctxFunnel = document.getElementById('chart-funnel').getContext('2d');
+            const stageLabels = funnel.stages.map(s => s.stage);
+            const stageCounts = funnel.stages.map(s => s.count);
+            if (funnelChart) { funnelChart.destroy(); funnelChart = null; }
+            funnelChart = new Chart(ctxFunnel, {
+                type: 'bar',
+                data: {
+                    labels: stageLabels,
+                    datasets: [{
+                        data: stageCounts,
+                        backgroundColor: ['#165dff', '#3d7dff', '#7ea3ff', '#52c41a'],
+                        borderRadius: 4,
+                    }],
+                },
+                options: {
+                    indexAxis: 'y', // 横向柱状图
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: '#7c8aa3', stepSize: 1 }, grid: { color: '#232d3d' } },
+                        y: { ticks: { color: '#e7ebf3', font: { size: 12 } }, grid: { display: false } },
+                    },
+                },
+            });
+        } catch (e) {
+            console.error('转化漏斗图渲染失败:', e);
+        }
+
         // 趋势图
         try {
             const ctx1 = document.getElementById('chart-daily').getContext('2d');
@@ -163,10 +211,12 @@ async function loadRecords() {
     const q = document.getElementById('filter-q').value.trim();
     const platform = document.getElementById('filter-platform').value;
     const minScore = document.getElementById('filter-score').value;
+    const status = document.getElementById('filter-status').value;
     const params = new URLSearchParams({ limit: 300 });
     if (q) params.set('q', q);
     if (platform) params.set('platform', platform);
     if (minScore && minScore !== '0') params.set('minScore', minScore);
+    if (status) params.set('status', status);
 
     const data = await api('/applications?' + params.toString());
     const box = document.getElementById('records-table');
@@ -174,16 +224,46 @@ async function loadRecords() {
         box.innerHTML = '<div class="empty-state">没有符合条件的记录</div>';
         return;
     }
-    box.innerHTML = data.items.map(x => `
+    const statusOptions = STATUS_META.all.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+    box.innerHTML = data.items.map(x => {
+        const st = x.status || STATUS_META.stages[0];
+        return `
         <div class="row" data-id="${x.id}">
             <span class="t">${fmtTime(x.time)}</span>
             <span class="score">${x.score}%</span>
             <span class="name">${escapeHtml(x.name)}</span>
             <span class="company">${escapeHtml(x.company)} · ${escapeHtml(x.platform)}</span>
+            <select class="status-select ${statusClass(st)}" title="更新投递状态">${statusOptions}</select>
             <span class="edit" title="编辑公司名">✎</span>
             <span class="del" title="删除">✕</span>
         </div>
-    `).join('');
+    `;
+    }).join('');
+    // 渲染完之后再统一设置每个 select 的当前值——放在拼接的 HTML 字符串里用变量插值容易因为
+    // HTML 转义/属性写法出错，用 DOM API 设置 .value 更稳妥。
+    box.querySelectorAll('.row').forEach(row => {
+        const id = row.dataset.id;
+        const item = data.items.find(x => x.id === id);
+        const sel = row.querySelector('.status-select');
+        sel.value = item.status || STATUS_META.stages[0];
+        sel.addEventListener('change', async () => {
+            const newStatus = sel.value;
+            const prevClass = sel.className;
+            try {
+                const res = await fetch(`${API}/applications/${id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus }),
+                });
+                if (!res.ok) throw new Error('保存失败: ' + res.status);
+                sel.className = `status-select ${statusClass(newStatus)}`;
+            } catch (err) {
+                alert('更新状态失败: ' + err.message);
+                sel.className = prevClass;
+                sel.value = item.status || STATUS_META.stages[0]; // 恢复原值
+            }
+        });
+    });
     box.querySelectorAll('.edit').forEach(el => {
         el.addEventListener('click', async (e) => {
             const row = e.target.closest('.row');
@@ -220,6 +300,7 @@ document.getElementById('filter-refresh').addEventListener('click', loadRecords)
 document.getElementById('filter-q').addEventListener('keydown', e => { if (e.key === 'Enter') loadRecords(); });
 document.getElementById('filter-platform').addEventListener('change', loadRecords);
 document.getElementById('filter-score').addEventListener('change', loadRecords);
+document.getElementById('filter-status').addEventListener('change', loadRecords);
 
 document.getElementById('export-csv-btn').addEventListener('click', () => {
     // 改用后端直出的 CSV 接口，而不是前端自己拼 CSV 字符串——
@@ -228,10 +309,12 @@ document.getElementById('export-csv-btn').addEventListener('click', () => {
     const q = document.getElementById('filter-q').value.trim();
     const platform = document.getElementById('filter-platform').value;
     const minScore = document.getElementById('filter-score').value;
+    const status = document.getElementById('filter-status').value;
     const params = new URLSearchParams();
     if (q) params.set('q', q);
     if (platform) params.set('platform', platform);
     if (minScore && minScore !== '0') params.set('minScore', minScore);
+    if (status) params.set('status', status);
     window.open(`${API}/applications/export.csv?${params.toString()}`, '_blank');
 });
 
@@ -279,7 +362,7 @@ document.getElementById('cfg-save-btn').addEventListener('click', async () => {
 });
 
 // ---- 初始加载 ----
-loadOverview().catch(err => console.error(err));
+loadStatusMeta().then(loadOverview).catch(err => console.error(err));
 
 // 如果首次加载时 cdnjs 的 Chart.js 失败、触发了 jsdelivr 备用CDN（见 index.html），
 // 备用脚本是异步插入的，加载完成时机可能晚于这里的首次 loadOverview() 调用，

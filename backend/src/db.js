@@ -11,6 +11,17 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const MAX_BACKUPS = 20; // 最多保留最近20份自动备份，防止 backups/ 目录无限增长
 
+// ============================================================
+// 投递状态流转（v1.2.0 新增）
+// ============================================================
+// STAGE_ORDER 是"正向推进"的阶段，有先后顺序，用于画转化漏斗。
+// '已拒绝' 是一个独立的终止态，不算在漏斗阶段里——因为在任何阶段都可能被拒，
+// 用一个单独的 stageReached 字段记录"曾经到达过的最远阶段"，被拒不会抹掉之前的进度，
+// 这样漏斗图才能正确反映"到面试的有多少个，即使后来被拒了"。
+const STAGE_ORDER = ['已投递', '已回复', '面试中', 'offer'];
+const REJECTED_STATUS = '已拒绝';
+const ALL_STATUSES = [...STAGE_ORDER, REJECTED_STATUS];
+
 const DEFAULT_CONFIG = {
     city: '佛山',
     jobKeywords: ['IT技术支持', '运维工程师', '技术支持', '网络运维', '物联网', '桌面运维'],
@@ -114,6 +125,8 @@ function addApplication(record) {
             salary: record.salary || '',
             city: record.city || '',
             time: record.time || new Date().toISOString(),
+            status: STAGE_ORDER[0],       // 默认"已投递"
+            stageReached: STAGE_ORDER[0], // 曾到达过的最远阶段，初始与 status 一致
         };
         list.push(newRecord);
         backupBeforeWrite(APPLICATIONS_FILE, 'applications');
@@ -129,12 +142,24 @@ function updateApplication(id, patch) {
         if (idx === -1) return null;
 
         // 只允许更新这几个字段，防止调用方顺手改掉 id/time 等不该动的字段
-        const allowed = ['name', 'company', 'score', 'matched', 'platform', 'salary', 'city'];
+        const allowed = ['name', 'company', 'score', 'matched', 'platform', 'salary', 'city', 'status'];
         const updated = { ...list[idx] };
         for (const key of allowed) {
             if (patch[key] === undefined) continue;
             if (key === 'score' && typeof patch.score !== 'number') continue;
             if (key === 'matched' && !Array.isArray(patch.matched)) continue;
+            if (key === 'status') {
+                if (typeof patch.status !== 'string' || !ALL_STATUSES.includes(patch.status)) continue; // 非法状态值直接忽略
+                updated.status = patch.status;
+                // 正向阶段：推进 stageReached（取较大值，防止误操作把进度往回拖）；
+                // 标记"已拒绝"时不动 stageReached，保留"曾经到达过面试"这类历史进度，漏斗图才准确。
+                const stageIdx = STAGE_ORDER.indexOf(patch.status);
+                if (stageIdx !== -1) {
+                    const curIdx = STAGE_ORDER.indexOf(updated.stageReached || STAGE_ORDER[0]);
+                    if (stageIdx > curIdx) updated.stageReached = patch.status;
+                }
+                continue; // status 已单独处理，不走下面的通用赋值
+            }
             updated[key] = patch[key];
         }
         list[idx] = updated;
@@ -156,10 +181,11 @@ function deleteApplication(id) {
     });
 }
 
-function queryApplications({ platform, minScore, q, limit, offset } = {}) {
+function queryApplications({ platform, minScore, q, status, limit, offset } = {}) {
     let list = readApplications();
     if (platform) list = list.filter(x => x.platform === platform);
     if (minScore) list = list.filter(x => x.score >= Number(minScore));
+    if (status) list = list.filter(x => (x.status || STAGE_ORDER[0]) === status);
     if (q) {
         const kw = q.toLowerCase();
         list = list.filter(x => (x.name || '').toLowerCase().includes(kw) || (x.company || '').toLowerCase().includes(kw));
@@ -259,11 +285,33 @@ function getSkillFrequency(topN = 10) {
         .map(([skill, count]) => ({ skill, count }));
 }
 
+// 转化漏斗：统计"到达过"每个阶段的记录数（累计口径——到了面试中的，也会计入"已投递"和"已回复"的计数）。
+// 兼容 v1.2.0 之前创建、没有 stageReached 字段的旧记录：统一按"已投递"处理（毕竟历史记录本来就只有这一个状态）。
+function getFunnelStats() {
+    const list = readApplications();
+    const stageCounts = {};
+    STAGE_ORDER.forEach(s => stageCounts[s] = 0);
+    let rejectedCount = 0;
+
+    list.forEach(x => {
+        const reached = x.stageReached || STAGE_ORDER[0];
+        const idx = STAGE_ORDER.indexOf(reached);
+        if (idx === -1) return; // 数据异常（不认识的阶段名）直接跳过，不计入漏斗
+        for (let i = 0; i <= idx; i++) stageCounts[STAGE_ORDER[i]]++;
+        if (x.status === REJECTED_STATUS) rejectedCount++;
+    });
+
+    return {
+        stages: STAGE_ORDER.map(s => ({ stage: s, count: stageCounts[s] })),
+        rejected: rejectedCount,
+    };
+}
+
 function toCsv(list) {
     const esc = s => `"${String(s || '').replace(/"/g, '""')}"`;
-    const header = '岗位名称,公司,平台,匹配度,匹配技能,城市,投递时间\n';
+    const header = '岗位名称,公司,平台,匹配度,匹配技能,城市,投递时间,状态\n';
     const rows = list.map(x =>
-        `${esc(x.name)},${esc(x.company)},${esc(x.platform)},${x.score || 0}%,${esc((x.matched || []).join('/'))},${esc(x.city)},${esc(x.time)}`
+        `${esc(x.name)},${esc(x.company)},${esc(x.platform)},${x.score || 0}%,${esc((x.matched || []).join('/'))},${esc(x.city)},${esc(x.time)},${esc(x.status || STAGE_ORDER[0])}`
     ).join('\n');
     return '\uFEFF' + header + rows; // \uFEFF: 让 Excel 正确识别 UTF-8 编码，避免中文乱码
 }
@@ -279,5 +327,9 @@ module.exports = {
     getOverviewStats,
     getDailyTrend,
     getSkillFrequency,
+    getFunnelStats,
     toCsv,
+    STAGE_ORDER,
+    ALL_STATUSES,
+    REJECTED_STATUS,
 };

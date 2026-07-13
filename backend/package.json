@@ -1,6 +1,6 @@
 {
   "name": "job-helper-backend",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "智能岗位匹配助手 - 投递数据管理与统计后端",
   "main": "server.js",
   "scripts": {
