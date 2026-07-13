@@ -1,13 +1,8 @@
 // ==UserScript==
 // @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v7.0
 // @namespace    http://tampermonkey.net/
-<<<<<<< HEAD
 // @version      7.0
 // @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（全平台代码审查合并：修复弹窗自动确认误触发页面导航锚点的共享代码缺陷，弹窗内复选框/确认按钮改为限定容器范围点击，统一岗位卡片查找与去重逻辑，猎聘配置补齐投递按钮关键词校验）
-=======
-// @version      6.1
-// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（修复版本提示文本，新增投递按钮调试日志）
->>>>>>> 8c36753a4abc77269df4966b7355482fb819a1ba
 // @connect      127.0.0.1
 // @connect      localhost
 // @author       罗启盛求职助手
@@ -309,6 +304,8 @@
                     matched: record.matched,
                     platform: platformName,
                     city: record.city || '',
+                    salary: record.salary || '',
+                    experience: record.experience || '',
                     time: new Date().toISOString(),
                 }),
                 timeout: 5000,
@@ -729,11 +726,14 @@
                 // 优先用站点配置的关键词查找投递按钮
                 const btnKeywords = site.applyButtonText || ['投递', '申请', '立即申请'];
                 let applyBtn = findApplyButton(jobEl, site.applyBtnSelectors, btnKeywords, Boolean(site.applyButtonText));
+                const fullText = jobEl.textContent || '';
                 return {
                     name: nameEl ? nameEl.textContent.trim() : '',
                     city: cityEl ? cityEl.textContent.trim() : '',
                     company: companyEl ? companyEl.textContent.trim() : '',
-                    fullText: jobEl.textContent || '',
+                    fullText,
+                    salary: parseSalary(fullText),
+                    experience: parseExperienceRequirement(fullText),
                     applyBtn,
                 };
             },
@@ -817,7 +817,7 @@
                         }
                         saveAppliedRecord(jobInfo.name, jobInfo.company, match.score, match.matched);
                         recordHistory(match.score);
-                        pushToBackend({ name: jobInfo.name, company: jobInfo.company, score: match.score, matched: match.matched, city: jobInfo.city }, this.name);
+                        pushToBackend({ name: jobInfo.name, company: jobInfo.company, score: match.score, matched: match.matched, city: jobInfo.city, salary: jobInfo.salary, experience: jobInfo.experience }, this.name);
                         this.completed++;
                         incrementDaily();
                         this.lastScores.push(match.score);
@@ -955,12 +955,6 @@
                 closeSelectors.forEach(sel => {
                     try { document.querySelectorAll(sel).forEach(el => { if (el.offsetParent !== null) el.click(); }); } catch (e) {}
                 });
-                // 额外：点击遮罩层关闭（常用于智联招聘弹窗）
-                try {
-                    const masks = document.querySelectorAll('.a-modal, .ivu-modal-mask, [class*="modal-mask"]');
-                    masks.forEach(m => { if (m.offsetParent !== null) { m.click(); } });
-                } catch (e) {}
-<<<<<<< HEAD
                 // 探测当前页面上"看起来像"弹窗/模态框的可见容器，后续的自动勾选、自动确认操作都限定在这些容器内部，
                 // 不再对整个页面生效——避免误触发列表页上无关的筛选复选框、分类链接等。
                 const dialogContainerSelectors = [
@@ -975,13 +969,6 @@
                             if (el.offsetParent !== null && !dialogContainers.includes(el)) dialogContainers.push(el);
                         });
                     } catch (e) {}
-=======
-                document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                    if (!cb.checked && cb.offsetParent !== null) {
-                        cb.checked = true;
-                        cb.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
->>>>>>> 8c36753a4abc77269df4966b7355482fb819a1ba
                 });
 
                 // 自动勾选弹窗内的确认类复选框（如"同意投递协议"），限定在弹窗容器内部，不影响列表页的筛选复选框
@@ -1170,6 +1157,8 @@
                     const company = job.querySelector('[class*="company-name"]')?.textContent?.trim() || '';
                     const jobLocation = job.querySelector('.company-location')?.textContent?.trim() || '';
                     const fullText = job.textContent || '';
+                    const salary = parseSalary(fullText);
+                    const experience = parseExperienceRequirement(fullText);
                     const match = calcMatch(fullText);
 
                     const advance = () => { scrollTop += 80; window.scrollTo({ top: scrollTop, behavior: 'smooth' }); return delay(jitter(1000)); };
@@ -1205,7 +1194,7 @@
                     this.lastScores.push(match.score);
                     saveAppliedRecord(name, company, match.score, match.matched);
                     recordHistory(match.score);
-                    pushToBackend({ name, company, score: match.score, matched: match.matched, city: jobLocation }, this.name);
+                    pushToBackend({ name, company, score: match.score, matched: match.matched, city: jobLocation, salary, experience }, this.name);
                     saveRunState(this.name, this.target, this.completed);
                     this.addLog(`✅ [${this.completed}/${this.target}] ${name} (${match.score}%)`, 'success');
                     beep(880, 100);
@@ -1780,11 +1769,7 @@
         observer.observe(document.body, { childList: true, subtree: true });
 
         setTimeout(() => processJobCards(false), 1000);
-<<<<<<< HEAD
         console.log('🤖 自动投递助手 v7.0 已启动');
-=======
-        console.log('🤖 自动投递助手 v6.0 已启动');
->>>>>>> 8c36753a4abc77269df4966b7355482fb819a1ba
         console.log(`📍 ${CONFIG.city} · 🎯 每日上限 ${CONFIG.dailyLimit} · 今日已投 ${getDailyStats().count}`);
         console.log('快捷键: Alt+S 启动/停止 · 面板 📊 查看统计 · ⚙️ 修改设置');
     }

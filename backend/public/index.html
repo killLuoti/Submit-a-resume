@@ -22,9 +22,10 @@
 
     <div class="topbar">
         <div class="brand">
-            <span class="dot"></span>
+            <span class="dot" id="ws-dot"></span>
             <h1>投递管理后台</h1>
             <span class="sub">job-helper · localhost:8787</span>
+            <span class="ws-status" id="ws-status" title="WebSocket 连接状态">⚡ 实时</span>
         </div>
         <div class="tabs">
             <button class="tab-btn active" data-tab="overview">总览</button>
@@ -72,6 +73,19 @@
                 <div id="skill-list"><div class="empty-state">暂无数据</div></div>
             </div>
         </div>
+
+        <div class="charts-row">
+            <div class="panel">
+                <h2>薪资分布 <span class="tag">salary</span>
+                    <span class="tag" id="salary-avg" style="float:right;">平均 –</span>
+                </h2>
+                <canvas id="chart-salary" height="200"></canvas>
+            </div>
+            <div class="panel">
+                <h2>平台转化率 <span class="tag">platform funnel</span></h2>
+                <div id="platform-funnel-list"><div class="empty-state">暂无数据</div></div>
+            </div>
+        </div>
     </div>
 
     <!-- ============ 投递记录 ============ -->
@@ -92,8 +106,31 @@
                 <select id="filter-status">
                     <option value="">全部状态</option>
                 </select>
+                <select id="filter-sort">
+                    <option value="time-desc">时间 ↓</option>
+                    <option value="time-asc">时间 ↑</option>
+                    <option value="score-desc">匹配度 ↓</option>
+                    <option value="score-asc">匹配度 ↑</option>
+                </select>
+                <button class="btn" id="add-record-btn">+ 手动添加</button>
                 <button class="btn ghost" id="filter-refresh">刷新</button>
-                <button class="btn" id="export-csv-btn">导出 CSV</button>
+                <div class="dropdown-wrap">
+                    <button class="btn" id="export-btn">导出 ▾</button>
+                    <div class="dropdown-menu" id="export-menu" style="display:none;">
+                        <button class="dropdown-item" id="export-csv-btn">导出 CSV</button>
+                        <button class="dropdown-item" id="export-json-btn">导出 JSON</button>
+                    </div>
+                </div>
+                <button class="btn" id="import-btn">导入 CSV</button>
+            </div>
+            <div class="batch-bar" id="batch-bar" style="display:none;">
+                <label class="batch-select-all"><input type="checkbox" id="select-all-cb"> 全选</label>
+                <span class="batch-count" id="batch-count">已选 0 条</span>
+                <select id="batch-status-select">
+                    <option value="">批量修改状态...</option>
+                </select>
+                <button class="btn" id="batch-status-btn" style="display:none;">确认修改</button>
+                <button class="btn bad" id="batch-delete-btn">批量删除</button>
             </div>
             <div class="activity-log" id="records-table" style="max-height:520px;">
                 <div class="empty-state">加载中...</div>
@@ -151,9 +188,123 @@
                 <button class="btn" id="cfg-save-btn">保存策略</button>
             </div>
         </div>
+
+        <!-- 数据备份管理 -->
+        <div class="panel">
+            <h2>数据备份 <span class="tag">自动备份最近20份</span></h2>
+            <div class="backup-actions">
+                <button class="btn" id="backup-create-btn">创建备份</button>
+                <button class="btn ghost" id="backup-refresh-btn">刷新列表</button>
+            </div>
+            <div class="backup-list" id="backup-list">
+                <div class="empty-state">加载中...</div>
+            </div>
+        </div>
     </div>
 
     <div class="footer-note">job-helper backend v1.2.0 · 数据保存在本地 data/ 目录 JSON 文件中，未上传任何第三方服务器</div>
+</div>
+
+<!-- CSV 导入模态框 -->
+<div id="import-modal-overlay" class="modal-overlay" style="display:none;">
+    <div class="modal modal-wide">
+        <div class="modal-header">
+            <h3>导入投递记录</h3>
+            <span class="modal-close" id="import-modal-close">✕</span>
+        </div>
+        <div class="modal-body">
+            <div class="import-tabs">
+                <button class="import-tab active" data-tab="file">上传文件</button>
+                <button class="import-tab" data-tab="paste">粘贴文本</button>
+            </div>
+            <div class="import-panel" id="import-file-panel">
+                <div class="import-dropzone" id="import-dropzone">
+                    <div class="import-dropzone-icon">📄</div>
+                    <div>拖拽 CSV 文件到此处，或</div>
+                    <button class="btn ghost" id="import-file-btn">选择文件</button>
+                    <input type="file" id="import-file-input" accept=".csv" style="display:none;">
+                </div>
+            </div>
+            <div class="import-panel" id="import-paste-panel" style="display:none;">
+                <textarea id="import-paste-input" placeholder="粘贴 CSV 内容...&#10;表头：岗位名称,公司,平台,匹配度,匹配技能,城市,薪资,投递时间,状态" rows="8"></textarea>
+            </div>
+            <div class="import-preview" id="import-preview" style="display:none;">
+                <div class="import-preview-header">预览：将导入 <span id="import-count">0</span> 条记录</div>
+                <div class="import-preview-list" id="import-preview-list"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn ghost" id="import-modal-cancel">取消</button>
+            <button class="btn" id="import-submit-btn" disabled>确认导入</button>
+        </div>
+    </div>
+</div>
+<div id="add-modal-overlay" class="modal-overlay" style="display:none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h3>手动添加投递记录</h3>
+            <span class="modal-close" id="add-modal-close">✕</span>
+        </div>
+        <div class="modal-body">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>岗位名称 *</label>
+                    <input type="text" id="add-name" placeholder="如：运维工程师">
+                </div>
+                <div class="form-group">
+                    <label>公司名称 *</label>
+                    <input type="text" id="add-company" placeholder="如：小米科技">
+                </div>
+                <div class="form-group">
+                    <label>匹配度 (0-100)</label>
+                    <input type="number" id="add-score" min="0" max="100" placeholder="如：65">
+                </div>
+                <div class="form-group">
+                    <label>招聘平台</label>
+                    <input type="text" id="add-platform" placeholder="如：智联招聘">
+                </div>
+                <div class="form-group">
+                    <label>城市</label>
+                    <input type="text" id="add-city" placeholder="如：佛山·禅城">
+                </div>
+                <div class="form-group">
+                    <label>薪资描述</label>
+                    <input type="text" id="add-salary" placeholder="如：8000-12000">
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>匹配技能（逗号分隔）</label>
+                    <input type="text" id="add-matched" placeholder="如：桌面运维, 网络运维">
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>备注</label>
+                    <textarea id="add-note" placeholder="可选备注信息"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn ghost" id="add-modal-cancel">取消</button>
+            <button class="btn" id="add-modal-submit">添加</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast 通知容器 -->
+<div id="toast-container"></div>
+
+<!-- 记录详情模态框 -->
+<div id="detail-modal-overlay" class="modal-overlay" style="display:none;">
+    <div class="modal modal-wide">
+        <div class="modal-header">
+            <h3 id="detail-title">投递记录详情</h3>
+            <span class="modal-close" id="detail-modal-close">✕</span>
+        </div>
+        <div class="modal-body" id="detail-body">
+            <div class="detail-grid" id="detail-grid"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn ghost" id="detail-modal-close-btn">关闭</button>
+        </div>
+    </div>
 </div>
 
 <script src="app.js"></script>

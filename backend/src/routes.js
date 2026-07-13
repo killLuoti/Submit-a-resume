@@ -4,6 +4,11 @@ const db = require('./db');
 
 const router = express.Router();
 
+// 获取 WebSocket 广播函数（由 server.js 挂载到 app 上）
+function getBroadcast(req) {
+    return req.app.get('wsBroadcast') || (() => {});
+}
+
 // 统一的 async 路由包装：捕获 db 层（写队列返回的是 Promise）的异常或拒绝，
 // 避免未处理的 Promise 拒绝导致进程崩溃或请求悬挂，同时给出统一的 JSON 错误格式。
 // ===== 修复说明 =====
@@ -20,8 +25,8 @@ function asyncHandler(fn) {
 
 // ---- 投递记录 ----
 router.get('/applications', asyncHandler(async (req, res) => {
-    const { platform, minScore, q, status, limit, offset } = req.query;
-    const result = db.queryApplications({ platform, minScore, q, status, limit, offset });
+    const { platform, minScore, q, status, city, salaryMin, salaryMax, limit, offset, sortBy, sortOrder } = req.query;
+    const result = db.queryApplications({ platform, minScore, q, status, city, salaryMin, salaryMax, limit, offset, sortBy, sortOrder });
     res.json(result);
 }));
 
@@ -36,22 +41,117 @@ router.get('/applications/export.csv', asyncHandler(async (req, res) => {
     res.send(csv);
 }));
 
+// JSON 导出
+router.get('/applications/export.json', asyncHandler(async (req, res) => {
+    const { platform, minScore, q, status } = req.query;
+    const { items } = db.queryApplications({ platform, minScore, q, status, limit: 100000, offset: 0 });
+    const json = db.toJson(items);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="投递记录_${new Date().toISOString().slice(0, 10)}.json"`);
+    res.send(json);
+}));
+
+// CSV 导入（multipart/form-data 或 raw body）
+router.post('/applications/import', asyncHandler(async (req, res) => {
+    let csvText = '';
+    // 支持 JSON body 传 { csv: "..." } 或者 raw text body
+    if (req.body && typeof req.body.csv === 'string') {
+        csvText = req.body.csv;
+    } else if (typeof req.body === 'string') {
+        csvText = req.body;
+    } else {
+        return res.status(400).json({ error: '请提供 CSV 数据（JSON body 中的 csv 字段，或 raw text body）' });
+    }
+    if (!csvText.trim()) return res.status(400).json({ error: 'CSV 数据为空' });
+
+    const records = db.parseCsv(csvText);
+    if (records.length === 0) return res.status(400).json({ error: '未能解析出任何有效记录，请检查 CSV 格式' });
+
+    const result = await db.importApplications(records);
+    if (result.created > 0) getBroadcast(req)('data:import', { created: result.created, skipped: result.skipped });
+    res.json({ message: `导入完成：新增 ${result.created} 条，跳过 ${result.skipped} 条重复`, ...result });
+}));
+
 router.post('/applications', asyncHandler(async (req, res) => {
-    const { name, company, score, matched, platform, salary, city, time } = req.body || {};
-    if (!name) return res.status(400).json({ error: '缺少岗位名称 name' });
-    const { created, record } = await db.addApplication({ name, company, score, matched, platform, salary, city, time });
+    const { name, company, score, matched, platform, salary, experience, city, time } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: '缺少岗位名称 name', code: 'MISSING_NAME' });
+    }
+    // 验证匹配度范围
+    const validatedScore = typeof score === 'number' ? Math.max(0, Math.min(100, score)) : 0;
+    // 验证 matched 必须是字符串数组
+    const validatedMatched = Array.isArray(matched) ? matched.filter(m => typeof m === 'string') : [];
+    // 验证时间格式
+    const validatedTime = time && !isNaN(new Date(time).getTime()) ? time : new Date().toISOString();
+
+    const { created, record } = await db.addApplication({
+        name: name.trim(),
+        company: (company || '').trim(),
+        score: validatedScore,
+        matched: validatedMatched,
+        platform: (platform || '手动录入').trim(),
+        salary: (salary || '').trim(),
+        experience: (experience || '').trim(),
+        city: (city || '').trim(),
+        time: validatedTime,
+    });
+    if (created) getBroadcast(req)('data:create', { record });
     res.status(created ? 201 : 200).json({ created, record });
 }));
 
+// ---- 批量操作 ----
+router.post('/applications/batch/delete', asyncHandler(async (req, res) => {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: '请提供 ids 数组' });
+    let deleted = 0;
+    for (const id of ids) {
+        const ok = await db.deleteApplication(id);
+        if (ok) deleted++;
+    }
+    if (deleted > 0) getBroadcast(req)('data:batch-delete', { deleted, ids });
+    res.json({ deleted, total: ids.length });
+}));
+
+router.patch('/applications/batch/status', asyncHandler(async (req, res) => {
+    const { ids, status } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: '请提供 ids 数组' });
+    if (!status) return res.status(400).json({ error: '请提供 status' });
+    let updated = 0;
+    for (const id of ids) {
+        const record = await db.updateApplication(id, { status });
+        if (record) updated++;
+    }
+    if (updated > 0) getBroadcast(req)('data:batch-status', { updated, status, ids });
+    res.json({ updated, total: ids.length });
+}));
+
+// 获取单条投递记录详情（放在 /:id 通用匹配之前，避免被 batch 路径误匹配）
+router.get('/applications/:id', asyncHandler(async (req, res) => {
+    const record = db.getApplicationById(req.params.id);
+    if (!record) return res.status(404).json({ error: '未找到该记录' });
+    res.json(record);
+}));
+
 router.patch('/applications/:id', asyncHandler(async (req, res) => {
-    const updated = await db.updateApplication(req.params.id, req.body || {});
-    if (!updated) return res.status(404).json({ error: '未找到该记录' });
+    const id = req.params.id;
+    if (!id || typeof id !== 'string') {
+        return res.status(400).json({ error: '无效的记录 ID', code: 'INVALID_ID' });
+    }
+    const patch = req.body || {};
+    // 验证 score 范围
+    if (patch.score !== undefined && typeof patch.score === 'number') {
+        patch.score = Math.max(0, Math.min(100, patch.score));
+    }
+    const updated = await db.updateApplication(id, patch);
+    if (!updated) return res.status(404).json({ error: '未找到该记录', code: 'NOT_FOUND' });
+    getBroadcast(req)('data:update', { record: updated });
     res.json({ updated: true, record: updated });
 }));
 
 router.delete('/applications/:id', asyncHandler(async (req, res) => {
     const ok = await db.deleteApplication(req.params.id);
     if (!ok) return res.status(404).json({ error: '未找到该记录' });
+    getBroadcast(req)('data:delete', { id: req.params.id });
     res.json({ deleted: true });
 }));
 
@@ -74,6 +174,14 @@ router.get('/stats/funnel', asyncHandler(async (req, res) => {
     res.json(db.getFunnelStats());
 }));
 
+router.get('/stats/salary', asyncHandler(async (req, res) => {
+    res.json(db.getSalaryStats());
+}));
+
+router.get('/stats/platform-funnel', asyncHandler(async (req, res) => {
+    res.json(db.getPlatformFunnelStats());
+}));
+
 // 暴露合法的状态取值列表，前端下拉框/状态选择器直接用这个渲染，不用在前端硬编码一份，
 // 以后要加新状态（比如"已婉拒"）只需要改 db.js 里的 ALL_STATUSES，前端自动跟着变。
 router.get('/meta/statuses', asyncHandler(async (req, res) => {
@@ -88,7 +196,29 @@ router.get('/config', asyncHandler(async (req, res) => {
 router.put('/config', asyncHandler(async (req, res) => {
     const { config, rejected } = await db.writeConfig(req.body || {});
     // rejected 列出了因类型不对被丢弃、未生效的字段，方便调用方（脚本/前端）发现自己传错了参数
+    getBroadcast(req)('config:update', { config });
     res.json({ config, rejected });
+}));
+
+// ---- 备份管理 ----
+router.get('/backups', asyncHandler(async (req, res) => {
+    res.json(db.listBackups());
+}));
+
+router.post('/backups/restore', asyncHandler(async (req, res) => {
+    const { filename } = req.body || {};
+    if (!filename) return res.status(400).json({ error: '请提供备份文件名 filename' });
+    const result = db.restoreBackup(filename);
+    if (!result.success) return res.status(400).json(result);
+    getBroadcast(req)('data:restore', { restored: result.restored, count: result.count });
+    res.json(result);
+}));
+
+router.post('/backups/create', asyncHandler(async (req, res) => {
+    const { label } = req.body || {};
+    const result = db.createBackup(label || 'applications');
+    if (!result.success) return res.status(500).json(result);
+    res.json(result);
 }));
 
 // ---- /api 下未匹配到的路径，返回统一 JSON 404 而不是 Express 默认的 HTML 页面 ----

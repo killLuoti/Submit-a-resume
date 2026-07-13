@@ -2,7 +2,9 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const http = require('http');
 const apiRoutes = require('./src/routes');
+const ws = require('./src/ws');
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -13,10 +15,17 @@ const PORT = process.env.PORT || 8787;
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
+// 将 WebSocket broadcast 函数挂载到 app 上，供路由使用
+app.set('wsBroadcast', ws.broadcast);
+
 app.use('/api', apiRoutes);
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+app.get('/health', (req, res) => res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    wsClients: ws.getClientCount(),
+}));
 
 // ---- 统一错误处理 ----
 // 之前没有这一层：路由里任何同步抛出的异常或 asyncHandler 捕获到的 Promise 拒绝，
@@ -31,7 +40,12 @@ app.use((err, req, res, next) => {
     res.status(err.status || 500).json({ error: err.message || '服务器内部错误' });
 });
 
-app.listen(PORT, () => {
+// 创建 HTTP 服务器并挂载 WebSocket
+const server = http.createServer(app);
+ws.init(server);
+
+server.listen(PORT, () => {
     console.log(`✅ 岗位投递管理后台已启动: http://localhost:${PORT}`);
     console.log(`📊 打开浏览器访问上面的地址查看统计面板`);
+    console.log(`🔌 WebSocket 实时推送已启用: ws://localhost:${PORT}`);
 });

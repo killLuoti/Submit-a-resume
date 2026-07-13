@@ -123,6 +123,7 @@ function addApplication(record) {
             matched: Array.isArray(record.matched) ? record.matched : [],
             platform: record.platform || '未知平台',
             salary: record.salary || '',
+            experience: record.experience || '',
             city: record.city || '',
             time: record.time || new Date().toISOString(),
             status: STAGE_ORDER[0],       // 默认"已投递"
@@ -142,7 +143,7 @@ function updateApplication(id, patch) {
         if (idx === -1) return null;
 
         // 只允许更新这几个字段，防止调用方顺手改掉 id/time 等不该动的字段
-        const allowed = ['name', 'company', 'score', 'matched', 'platform', 'salary', 'city', 'status'];
+        const allowed = ['name', 'company', 'score', 'matched', 'platform', 'salary', 'experience', 'city', 'status'];
         const updated = { ...list[idx] };
         for (const key of allowed) {
             if (patch[key] === undefined) continue;
@@ -181,21 +182,56 @@ function deleteApplication(id) {
     });
 }
 
-function queryApplications({ platform, minScore, q, status, limit, offset } = {}) {
+function queryApplications({ platform, minScore, q, status, city, salaryMin, salaryMax, limit, offset, sortBy, sortOrder } = {}) {
     let list = readApplications();
     if (platform) list = list.filter(x => x.platform === platform);
     if (minScore) list = list.filter(x => x.score >= Number(minScore));
     if (status) list = list.filter(x => (x.status || STAGE_ORDER[0]) === status);
+    if (city) {
+        const ck = city.toLowerCase();
+        list = list.filter(x => (x.city || '').toLowerCase().includes(ck));
+    }
     if (q) {
         const kw = q.toLowerCase();
-        list = list.filter(x => (x.name || '').toLowerCase().includes(kw) || (x.company || '').toLowerCase().includes(kw));
+        list = list.filter(x =>
+            (x.name || '').toLowerCase().includes(kw) ||
+            (x.company || '').toLowerCase().includes(kw) ||
+            (x.city || '').toLowerCase().includes(kw) ||
+            (x.platform || '').toLowerCase().includes(kw) ||
+            (x.salary || '').toLowerCase().includes(kw) ||
+            (Array.isArray(x.matched) ? x.matched.join(' ').toLowerCase().includes(kw) : false)
+        );
     }
-    list = list.sort((a, b) => new Date(b.time) - new Date(a.time));
+    // 薪资范围筛选
+    if (salaryMin || salaryMax) {
+        list = list.filter(x => {
+            const range = parseSalaryRange(x.salary);
+            if (!range) return false;
+            if (salaryMin && range.high < Number(salaryMin)) return false;
+            if (salaryMax && range.low > Number(salaryMax)) return false;
+            return true;
+        });
+    }
+    // 排序
+    const sKey = sortBy || 'time';
+    const sDir = sortOrder === 'asc' ? 1 : -1;
+    list = list.sort((a, b) => {
+        if (sKey === 'score') return ((a.score || 0) - (b.score || 0)) * sDir;
+        if (sKey === 'name') return (a.name || '').localeCompare(b.name || '') * sDir;
+        if (sKey === 'company') return (a.company || '').localeCompare(b.company || '') * sDir;
+        return (new Date(a.time || 0) - new Date(b.time || 0)) * sDir;
+    });
+
     const total = list.length;
     const off = Math.max(0, Number(offset) || 0);
-    // 上限 5000，避免调用方误传超大 limit 导致一次性序列化过大响应
     const lim = Math.min(5000, Math.max(1, Number(limit) || 100));
     return { total, items: list.slice(off, off + lim) };
+}
+
+// 按 ID 获取单条记录
+function getApplicationById(id) {
+    const list = readApplications();
+    return list.find(x => x.id === id) || null;
 }
 
 // ============================================================
@@ -316,19 +352,314 @@ function toCsv(list) {
     return '\uFEFF' + header + rows; // \uFEFF: 让 Excel 正确识别 UTF-8 编码，避免中文乱码
 }
 
+// ============================================================
+// 高级统计：薪资分布 & 平台转化率
+// ============================================================
+
+// 薪资分布统计：从记录的 salary 字段中解析数字范围，按区间统计数量
+// salary 字段格式多样："8000-12000"、"8K-12K"、"8千-1.2万"、"面议" 等
+function parseSalaryRange(salaryStr) {
+    if (!salaryStr || salaryStr === '面议') return null;
+    const s = String(salaryStr);
+    // 尝试匹配 "8000-12000" 或 "8K-12K" 或 "8k-12k"
+    let m = s.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*[Kk]/);
+    if (m) return { low: parseFloat(m[1]) * 1000, high: parseFloat(m[2]) * 1000 };
+    // 尝试匹配纯数字 "8000-12000"
+    m = s.match(/(\d{4,6})\s*[-~到至]\s*(\d{4,6})/);
+    if (m) return { low: parseInt(m[1]), high: parseInt(m[2]) };
+    // 尝试匹配 "8千-1.2万"
+    m = s.match(/(\d+(?:\.\d+)?)\s*千\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*万/);
+    if (m) return { low: parseFloat(m[1]) * 1000, high: parseFloat(m[2]) * 10000 };
+    return null;
+}
+
+function getSalaryStats() {
+    const list = readApplications();
+    const parsed = list.map(x => parseSalaryRange(x.salary)).filter(Boolean);
+    const count = parsed.length;
+    if (count === 0) return { count: 0, avgLow: 0, avgHigh: 0, distribution: [] };
+
+    const avgLow = Math.round(parsed.reduce((s, r) => s + r.low, 0) / count);
+    const avgHigh = Math.round(parsed.reduce((s, r) => s + r.high, 0) / count);
+
+    // 薪资区间分布
+    const ranges = [
+        { label: '<5K', min: 0, max: 5000 },
+        { label: '5K-8K', min: 5000, max: 8000 },
+        { label: '8K-12K', min: 8000, max: 12000 },
+        { label: '12K-18K', min: 12000, max: 18000 },
+        { label: '18K-25K', min: 18000, max: 25000 },
+        { label: '>25K', min: 25000, max: Infinity },
+    ];
+    const distribution = ranges.map(r => ({
+        label: r.label,
+        count: parsed.filter(p => p.low >= r.min && p.low < r.max).length,
+    }));
+
+    return { count, avgLow, avgHigh, distribution };
+}
+
+// 按平台统计漏斗转化率
+function getPlatformFunnelStats() {
+    const list = readApplications();
+    const platforms = {};
+
+    list.forEach(x => {
+        const p = x.platform || '未知平台';
+        if (!platforms[p]) platforms[p] = { stages: {}, rejected: 0, total: 0 };
+        platforms[p].total++;
+
+        const reached = x.stageReached || STAGE_ORDER[0];
+        const idx = STAGE_ORDER.indexOf(reached);
+        if (idx !== -1) {
+            for (let i = 0; i <= idx; i++) {
+                platforms[p].stages[STAGE_ORDER[i]] = (platforms[p].stages[STAGE_ORDER[i]] || 0) + 1;
+            }
+        }
+        if (x.status === REJECTED_STATUS) platforms[p].rejected++;
+    });
+
+    const result = Object.entries(platforms).map(([platform, data]) => ({
+        platform,
+        total: data.total,
+        stages: STAGE_ORDER.map(s => ({ stage: s, count: data.stages[s] || 0 })),
+        rejected: data.rejected,
+    }));
+
+    return result.sort((a, b) => b.total - a.total);
+}
+
+// ============================================================
+// 数据导入
+// ============================================================
+
+// 解析 CSV 文本为记录数组（支持带 BOM 头的 UTF-8 CSV）
+function parseCsv(csvText) {
+    // 去掉 BOM 头
+    const text = csvText.replace(/^\uFEFF/, '');
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) return []; // 至少要有表头 + 1 行数据
+
+    // 解析表头，建立列名到索引的映射
+    const header = parseCsvLine(lines[0]);
+    const colMap = {};
+    const fieldMap = { '岗位名称': 'name', '公司': 'company', '平台': 'platform', '匹配度': 'score', '匹配技能': 'matched', '城市': 'city', '薪资': 'salary', '投递时间': 'time', '状态': 'status' };
+    header.forEach((col, i) => {
+        const trimmed = col.trim().replace(/"/g, '');
+        if (fieldMap[trimmed]) colMap[fieldMap[trimmed]] = i;
+    });
+
+    const records = [];
+    for (let i = 1; i < lines.length; i++) {
+        const cols = parseCsvLine(lines[i]);
+        if (cols.length < 2) continue;
+
+        const get = (field) => {
+            const idx = colMap[field];
+            if (idx === undefined || idx >= cols.length) return '';
+            return cols[idx].trim().replace(/^"|"$/g, '').trim();
+        };
+
+        const name = get('name');
+        const company = get('company');
+        if (!name) continue; // 至少需要岗位名称
+
+        // 解析匹配度：去掉 % 号
+        let score = parseInt(get('score').replace(/%/g, '')) || 0;
+        if (score > 100) score = 100;
+        if (score < 0) score = 0;
+
+        // 解析匹配技能：用 / 或 , 分隔
+        const matchedStr = get('matched');
+        const matched = matchedStr ? matchedStr.split(/[/,，]/).map(s => s.trim()).filter(Boolean) : [];
+
+        // 解析时间
+        let time = get('time');
+        if (time && !time.includes('T')) time = new Date(time).toISOString();
+        if (!time) time = new Date().toISOString();
+
+        // 解析状态
+        let status = get('status');
+        if (!ALL_STATUSES.includes(status)) status = STAGE_ORDER[0];
+
+        records.push({
+            name,
+            company,
+            score,
+            matched,
+            platform: get('platform') || '手动录入',
+            salary: get('salary'),
+            city: get('city'),
+            time,
+            status,
+        });
+    }
+    return records;
+}
+
+// 简单的 CSV 行解析（支持双引号包裹的字段，内含逗号/换行）
+function parseCsvLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+            if (ch === '"') {
+                if (i + 1 < line.length && line[i + 1] === '"') {
+                    current += '"';
+                    i++; // 跳过转义的双引号
+                } else {
+                    inQuotes = false;
+                }
+            } else {
+                current += ch;
+            }
+        } else {
+            if (ch === '"') {
+                inQuotes = true;
+            } else if (ch === ',') {
+                result.push(current);
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+    }
+    result.push(current);
+    return result;
+}
+
+// 批量导入记录：逐条去重后写入
+function importApplications(records) {
+    return serialize(() => {
+        const list = readApplications();
+        let created = 0, skipped = 0;
+        for (const record of records) {
+            const key = makeKey(record.name, record.company);
+            const existing = list.find(x => makeKey(x.name, x.company) === key);
+            if (existing) { skipped++; continue; }
+
+            const newRecord = {
+                id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+                name: record.name || '',
+                company: record.company || '',
+                score: typeof record.score === 'number' ? record.score : 0,
+                matched: Array.isArray(record.matched) ? record.matched : [],
+                platform: record.platform || '手动录入',
+                salary: record.salary || '',
+                experience: record.experience || '',
+                city: record.city || '',
+                time: record.time || new Date().toISOString(),
+                status: record.status || STAGE_ORDER[0],
+                stageReached: record.status || STAGE_ORDER[0],
+            };
+            list.push(newRecord);
+            created++;
+        }
+        if (created > 0) {
+            backupBeforeWrite(APPLICATIONS_FILE, 'applications');
+            writeJsonSync(APPLICATIONS_FILE, list);
+        }
+        return { created, skipped, total: records.length };
+    });
+}
+
+// ============================================================
+// JSON 导出
+// ============================================================
+function toJson(list) {
+    return JSON.stringify(list, null, 2);
+}
+
+// ============================================================
+// 备份管理
+// ============================================================
+
+// 列出所有备份文件（按时间倒序）
+function listBackups() {
+    try {
+        if (!fs.existsSync(BACKUP_DIR)) return [];
+        const files = fs.readdirSync(BACKUP_DIR)
+            .filter(f => f.endsWith('.json'))
+            .sort()
+            .reverse();
+        return files.map(f => {
+            const stat = fs.statSync(path.join(BACKUP_DIR, f));
+            const label = f.split('_')[0]; // "applications" 或 "config"
+            return {
+                name: f,
+                label,
+                size: stat.size,
+                time: stat.mtime.toISOString(),
+            };
+        });
+    } catch (e) {
+        return [];
+    }
+}
+
+// 从备份恢复数据
+function restoreBackup(filename) {
+    const backupPath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(backupPath)) return { success: false, error: '备份文件不存在' };
+
+    try {
+        const data = JSON.parse(fs.readFileSync(backupPath, 'utf-8'));
+        const label = filename.split('_')[0];
+
+        if (label === 'applications') {
+            if (!Array.isArray(data)) return { success: false, error: '备份数据格式错误：期望数组' };
+            backupBeforeWrite(APPLICATIONS_FILE, 'applications');
+            writeJsonSync(APPLICATIONS_FILE, data);
+            return { success: true, restored: 'applications', count: data.length };
+        } else if (label === 'config') {
+            if (typeof data !== 'object' || Array.isArray(data)) return { success: false, error: '备份数据格式错误：期望对象' };
+            backupBeforeWrite(CONFIG_FILE, 'config');
+            writeJsonSync(CONFIG_FILE, data);
+            return { success: true, restored: 'config' };
+        } else {
+            return { success: false, error: `未知的备份类型: ${label}` };
+        }
+    } catch (e) {
+        return { success: false, error: `备份文件读取失败: ${e.message}` };
+    }
+}
+
+// 手动创建备份
+function createBackup(label) {
+    const srcFile = label === 'config' ? CONFIG_FILE : APPLICATIONS_FILE;
+    if (!fs.existsSync(srcFile)) return { success: false, error: '数据文件不存在' };
+    try {
+        backupBeforeWrite(srcFile, label);
+        return { success: true, message: `已创建 ${label} 备份` };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
 module.exports = {
     readApplications,
     addApplication,
     updateApplication,
     deleteApplication,
     queryApplications,
+    getApplicationById,
     readConfig,
     writeConfig,
     getOverviewStats,
     getDailyTrend,
     getSkillFrequency,
     getFunnelStats,
+    getSalaryStats,
+    getPlatformFunnelStats,
     toCsv,
+    toJson,
+    parseCsv,
+    importApplications,
+    listBackups,
+    restoreBackup,
+    createBackup,
     STAGE_ORDER,
     ALL_STATUSES,
     REJECTED_STATUS,
