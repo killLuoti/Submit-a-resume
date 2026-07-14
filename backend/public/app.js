@@ -281,6 +281,7 @@ async function loadOverview() {
                 <span class="t">${fmtTime(x.time)}</span>
                 <span class="score">${x.score}%</span>
                 <span class="name">${escapeHtml(x.name)}</span>
+                <span class="salary-tag">${x.salary ? escapeHtml(x.salary) : ''}</span>
                 <span class="company">${escapeHtml(x.company)}</span>
             </div>
         `).join('');
@@ -426,6 +427,7 @@ async function loadRecords() {
             <span class="score">${x.score}%</span>
             <span class="name">${escapeHtml(x.name)}</span>
             <span class="company">${escapeHtml(x.company)} · ${escapeHtml(x.platform)}</span>
+            <span class="salary-tag">${x.salary ? escapeHtml(x.salary) : ''}</span>
             <select class="status-select ${statusClass(st)}" title="更新投递状态">${statusOptions}</select>
             <span class="edit" title="编辑公司名">✎</span>
             <span class="del" title="删除">✕</span>
@@ -522,14 +524,15 @@ async function showRecordDetail(id) {
             <div class="detail-item full"><div class="detail-label">岗位名称</div><div class="detail-value">${escapeHtml(record.name)}</div></div>
             <div class="detail-item"><div class="detail-label">公司</div><div class="detail-value">${escapeHtml(record.company)}</div></div>
             <div class="detail-item"><div class="detail-label">平台</div><div class="detail-value">${escapeHtml(record.platform)}</div></div>
+            <div class="detail-item"><div class="detail-label">薪资</div><div class="detail-value mono">${escapeHtml(record.salary || '–')}</div></div>
             <div class="detail-item"><div class="detail-label">匹配度</div><div class="detail-value mono">${record.score}%</div></div>
             <div class="detail-item"><div class="detail-label">状态</div><div class="detail-value"><span class="status-select ${statusClass(st)}" style="border:none;padding:0;">${escapeHtml(st)}</span></div></div>
             <div class="detail-item"><div class="detail-label">城市</div><div class="detail-value">${escapeHtml(record.city || '–')}</div></div>
-            <div class="detail-item"><div class="detail-label">薪资</div><div class="detail-value mono">${escapeHtml(record.salary || '–')}</div></div>
             <div class="detail-item"><div class="detail-label">经验要求</div><div class="detail-value mono">${escapeHtml(record.experience || '–')}</div></div>
             <div class="detail-item"><div class="detail-label">投递时间</div><div class="detail-value mono">${fmtTime(record.time)}</div></div>
             <div class="detail-item"><div class="detail-label">曾达最远阶段</div><div class="detail-value">${escapeHtml(record.stageReached || st)}</div></div>
             <div class="detail-item full"><div class="detail-label">匹配技能</div><div class="detail-value">${matchedTags || '<span style="color:var(--text-dim)">–</span>'}</div></div>
+            ${record.description ? `<div class="detail-item full"><div class="detail-label">职位描述</div><div class="detail-value detail-desc">${escapeHtml(record.description)}</div></div>` : ''}
             <div class="detail-item full"><div class="detail-label">记录 ID</div><div class="detail-value mono" style="font-size:11px;color:var(--text-dim);">${escapeHtml(record.id)}</div></div>
         `;
         detailOverlay.style.display = '';

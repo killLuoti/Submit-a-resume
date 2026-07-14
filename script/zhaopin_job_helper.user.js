@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v7.0
 // @namespace    http://tampermonkey.net/
-// @version      7.0
-// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（全平台代码审查合并：修复弹窗自动确认误触发页面导航锚点的共享代码缺陷，弹窗内复选框/确认按钮改为限定容器范围点击，统一岗位卡片查找与去重逻辑，猎聘配置补齐投递按钮关键词校验）
+// @version      7.2
+// @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（智联/前程无忧新增详情API获取完整职位描述和薪资）
 // @connect      127.0.0.1
 // @connect      localhost
+// @connect      fe-api.zhaopin.com
+// @connect      jobs.51job.com
 // @author       罗启盛求职助手
 // @match        https://www.zhaopin.com/*
 // @match        https://sou.zhaopin.com/*
@@ -31,19 +33,19 @@
     // ============================================================
     const DEFAULT_CONFIG = {
         city: '佛山',
-        jobKeywords: ['IT技术支持', '运维工程师', '技术支持', '网络运维', '物联网', '桌面运维'],
-        blacklistKeywords: ['外包', '劳务派遣', '中介', '兼职'],
+        jobKeywords: ['IT技术支持', '运维工程师', '技术支持', '网络运维', '物联网', '桌面运维', '系统运维', '网络管理员', '网管', 'helpdesk', 'IT专员', '信息化', '系统管理员', '机房运维', '智能硬件', 'IT工程师'],
+        blacklistKeywords: ['外包', '劳务派遣', '中介', '兼职', '实习', '助理'],
         blacklistCompanies: [],
         negativeSignals: ['日结', '刷单', '押金', '培训费', '中介费', '有偿内推', '入职费'],
-        expectedSalary: [7000, 10000],
-        skipIfSalaryUnknown: false,
+        expectedSalary: [3000, 12000],
+        skipIfSalaryUnknown: true,
 
         myYearsExperience: 4,       // 你的工作年限，用于经验要求过滤
-        maxExperienceGap: 2,        // 岗位要求年限超过 "我的年限+此值" 时跳过
+        maxExperienceGap: 1,        // 岗位要求年限超过 "我的年限+此值" 时跳过（精准模式：只投±1年）
 
-        deliverCount: 50,
-        dailyLimit: 30,
-        batchInterval: 3000,
+        deliverCount: 30,
+        dailyLimit: 20,
+        batchInterval: 4000,
         jitterPercent: 30,           // 延时随机浮动百分比，让节奏更平稳，减少页面卡顿/误触发
         watchdogNoProgressMs: 120000, // 运行N毫秒仍0投递则自动停止（多半是选择器不匹配该页面）
         autoNextPage: true,
@@ -57,7 +59,7 @@
         syncEnabled: false,
         backendUrl: 'http://127.0.0.1:8787/api',
 
-        greetingTemplate: '您好，我有4年IT技术支持/运维经验，看到贵司该岗位与我的技能比较匹配，希望有机会进一步沟通，谢谢！',
+        greetingTemplate: '您好，我有4年IT运维与技术支持经验，熟悉桌面运维、网络管理、系统维护及物联网相关技术，看到贵司该岗位与我的经验较为匹配，希望能进一步沟通，期待您的回复！',
 
         skills: {
             '桌面运维':          { weight: 10, category: '运维' },
@@ -290,6 +292,35 @@
     }
 
     // ---- 同步投递记录到本地管理后台（可选，失败不影响主流程）----
+    function formatSalary(sal) {
+        if (!sal) return '';
+        // 如果是字符串（如从 API 获取的 "1.5-2.5万·14薪"），直接返回
+        if (typeof sal === 'string') return sal;
+        if (typeof sal !== 'object') return '';
+        if (sal.negotiable) return '面议';
+        if (sal.low != null && sal.high != null) {
+            const fmt = v => v >= 10000 ? (v / 10000).toFixed(v % 10000 === 0 ? 0 : 1) + '万' : (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + 'K';
+            return fmt(sal.low) + ' - ' + fmt(sal.high);
+        }
+        return '';
+    }
+
+    // 将经验要求对象/字符串格式化为可读文本
+    function formatExperience(exp) {
+        if (!exp) return '';
+        if (typeof exp === 'string') return exp;
+        if (typeof exp !== 'object') return '';
+        // { min: 0, max: 99 } 或 { min: 2, max: 5 }
+        if (exp.min != null && exp.max != null) {
+            if (exp.min === 0 && exp.max === 0) return '应届/无经验';
+            if (exp.min === 0 && exp.max === 99) return '经验不限';
+            if (exp.min === 0) return exp.max + '年以下';
+            if (exp.max >= 99) return exp.min + '年以上';
+            return exp.min + '-' + exp.max + '年';
+        }
+        return '';
+    }
+
     function pushToBackend(record, platformName) {
         if (!CONFIG.syncEnabled || !CONFIG.backendUrl) return;
         try {
@@ -304,8 +335,9 @@
                     matched: record.matched,
                     platform: platformName,
                     city: record.city || '',
-                    salary: record.salary || '',
-                    experience: record.experience || '',
+                    salary: formatSalary(record.salary),
+                    experience: formatExperience(record.experience),
+                    description: (record.description || '').slice(0, 2000),
                     time: new Date().toISOString(),
                 }),
                 timeout: 5000,
@@ -313,6 +345,230 @@
                 ontimeout: () => console.warn('🤖 后台同步超时（后台可能未启动，可忽略）'),
             });
         } catch (e) { /* 同步失败不影响主投递流程 */ }
+    }
+
+    // 通过智联招聘详情 API 获取完整职位描述、薪资等信息
+    // number 格式如 CC404818830J40902424202，从岗位标题链接 href 中提取
+    function fetchZhaopinDetail(number) {
+        return new Promise((resolve) => {
+            if (!number) return resolve(null);
+            try {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: `https://fe-api.zhaopin.com/c/i/jobs/position-detail-new?number=${encodeURIComponent(number)}&platform=13`,
+                    headers: { 'Accept': 'application/json' },
+                    timeout: 6000,
+                    onload: (res) => {
+                        try {
+                            const json = JSON.parse(res.responseText);
+                            if (json.code === 200 && json.data && json.data.detailedPosition) {
+                                const dp = json.data.detailedPosition;
+                                // 清理 HTML 标签，保留纯文本（去 <p><br> 等）
+                                const descText = (dp.jobDesc || dp.jobDescPC || '').replace(/<[^>]+>/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+                                resolve({
+                                    description: descText,
+                                    salary: dp.salary60 || '',
+                                    education: dp.education || '',
+                                    workingExp: dp.positionWorkingExp || dp.workingExp || '',
+                                    workAddress: dp.workAddress || '',
+                                    companySize: (json.data.detailedCompany || {}).companySize || '',
+                                });
+                            } else {
+                                resolve(null);
+                            }
+                        } catch (e) { resolve(null); }
+                    },
+                    onerror: () => resolve(null),
+                    ontimeout: () => resolve(null),
+                });
+            } catch (e) { resolve(null); }
+        });
+    }
+
+    // 从智联招聘岗位卡片中提取岗位编号（number）
+    // 标题链接 href 格式：http://jobs.zhaopin.com/CC404818830J40902424202.htm
+    function extractZhaopinNumber(jobEl) {
+        try {
+            const links = jobEl.querySelectorAll('a[href*="jobs.zhaopin.com"], a[href*="zhaopin.com"]');
+            for (const a of links) {
+                const href = a.getAttribute('href') || '';
+                const m = href.match(/\/(CC\d+J\d+)\./);
+                if (m) return m[1];
+            }
+            // 兜底：从任意链接 href 中匹配 CC 开头的编号
+            const allLinks = jobEl.querySelectorAll('a[href]');
+            for (const a of allLinks) {
+                const href = a.getAttribute('href') || '';
+                const m = href.match(/(CC\w+)/);
+                if (m) return m[1];
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    // 从前程无忧岗位卡片中提取详情页链接
+    // 标题链接 href 格式：/foshan-sdq/172361885.html 或 https://jobs.51job.com/foshan-sdq/172361885.html
+    function extract51jobUrl(jobEl) {
+        try {
+            const links = jobEl.querySelectorAll('a[href*="51job.com"], a[href*="/"]');
+            for (const a of links) {
+                const href = a.getAttribute('href') || '';
+                // 匹配岗位详情页链接（含数字 ID 的 .html）
+                if (/\d+\.html/.test(href)) {
+                    if (href.startsWith('http')) return href;
+                    if (href.startsWith('//')) return 'https:' + href;
+                    return 'https://jobs.51job.com' + href;
+                }
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    // 通过前程无忧详情页获取完整职位描述和薪资
+    // 优先从 window.__NUXT__ 提取 detailJobInfo（数据更丰富），兜底用 JSON-LD
+
+    // 辅助函数：通过大括号配对提取对象字面量（解决嵌套对象问题）
+    function extractObjectLiteralByKey(source, key) {
+        const keyIndex = source.indexOf(key);
+        if (keyIndex < 0) return null;
+
+        const colonIndex = source.indexOf(':', keyIndex + key.length);
+        if (colonIndex < 0) return null;
+
+        let i = colonIndex + 1;
+        while (i < source.length && /\s/.test(source[i])) i++;
+
+        if (source[i] !== '{') return null;
+
+        const start = i;
+        let depth = 0;
+        let inString = false;
+        let quote = '';
+        let escaped = false;
+
+        for (; i < source.length; i++) {
+            const ch = source[i];
+            if (inString) {
+                if (escaped) { escaped = false; continue; }
+                if (ch === '\\') { escaped = true; continue; }
+                if (ch === quote) { inString = false; }
+                continue;
+            }
+            if (ch === '"' || ch === "'") { inString = true; quote = ch; continue; }
+            if (ch === '{') { depth++; }
+            else if (ch === '}') {
+                depth--;
+                if (depth === 0) return source.slice(start, i + 1);
+            }
+        }
+        return null;
+    }
+
+    function safeEvalObjectLiteral(literal) {
+        if (!literal) return null;
+        try { return (new Function(`return (${literal});`)()); }
+        catch (e) { return null; }
+    }
+
+    function tryExtract51jobDetailFromNuxt(html) {
+        try {
+            const nuxtIndex = html.indexOf('window.__NUXT__');
+            if (nuxtIndex < 0) return null;
+
+            const endIndex = html.indexOf('</script>', nuxtIndex);
+            const nuxtSnippet = endIndex > -1 ? html.slice(nuxtIndex, endIndex + 9) : html.slice(nuxtIndex);
+
+            const detailLiteral = extractObjectLiteralByKey(nuxtSnippet, 'detailJobInfo');
+            if (!detailLiteral) return null;
+
+            const detailObj = safeEvalObjectLiteral(detailLiteral);
+            if (!detailObj || typeof detailObj !== 'object') return null;
+
+            const desc = (detailObj.jobDescribe || '').replace(/\t\n/g, '\n').replace(/\t/g, ' ').replace(/\u002F/g, '/').trim();
+
+            let salaryText = detailObj.provideSalaryString || '';
+            if (!salaryText && detailObj.jobSalaryDown != null && detailObj.jobSalaryUp != null) {
+                const fmt = n => n >= 10000 ? (n / 10000).toFixed(n % 10000 === 0 ? 0 : 1) + '万' : (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + '千';
+                salaryText = fmt(detailObj.jobSalaryDown) + '-' + fmt(detailObj.jobSalaryUp);
+            }
+
+            return { description: desc, salary: salaryText, education: detailObj.degreeString || '', workingExp: detailObj.workYearString || '' };
+        } catch (e) { return null; }
+    }
+
+    function tryExtract51jobDetailFromJsonLd(html) {
+        try {
+            const matches = html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
+            for (const match of matches) {
+                try {
+                    const parsed = JSON.parse(match[1]);
+                    const nodes = Array.isArray(parsed) ? parsed : (parsed && parsed['@graph'] ? parsed['@graph'] : [parsed]);
+
+                    for (const node of nodes) {
+                        if (!node || typeof node !== 'object') continue;
+                        const desc = (node.description || '').replace(/<[^>]+>/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
+                        let salaryText = '';
+                        if (node.baseSalary && node.baseSalary.value) {
+                            const v = node.baseSalary.value;
+                            const unit = v.unitText || '月薪';
+                            if (v.minValue != null && v.maxValue != null) {
+                                const fmt = n => n >= 10000 ? (n / 10000).toFixed(n % 10000 === 0 ? 0 : 1) + '万' : (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + 'K';
+                                salaryText = fmt(v.minValue) + ' - ' + fmt(v.maxValue) + '·' + unit;
+                            }
+                        }
+
+                        if (desc || salaryText || node.educationRequirements || node.experienceRequirements) {
+                            return { description: desc, salary: salaryText, education: node.educationRequirements || '', workingExp: node.experienceRequirements || '' };
+                        }
+                    }
+                } catch (e) {}
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    function fetch51jobDetail(url) {
+        return new Promise((resolve) => {
+            if (!url) return resolve(null);
+            try {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url,
+                    headers: { 'Accept': 'text/html' },
+                    timeout: 8000,
+                    onload: (res) => {
+                        try {
+                            const html = res.responseText || '';
+                            const nuxtDetail = tryExtract51jobDetailFromNuxt(html);
+                            if (nuxtDetail) return resolve(nuxtDetail);
+
+                            const ldDetail = tryExtract51jobDetailFromJsonLd(html);
+                            if (ldDetail) return resolve(ldDetail);
+
+                            console.warn('🤖 [51job] 详情提取失败，__NUXT__ 和 JSON-LD 均未命中，URL:', url);
+                            resolve(null);
+                        } catch (e) { resolve(null); }
+                    },
+                    onerror: () => resolve(null),
+                    ontimeout: () => resolve(null),
+                });
+            } catch (e) { resolve(null); }
+        });
+    }
+
+    // 通用的岗位详情获取分发器：根据平台调用对应的详情 API
+    async function fetchJobDetail(platformName, jobEl, jobInfo) {
+        try {
+            if (platformName === '智联招聘') {
+                const zpNumber = extractZhaopinNumber(jobEl);
+                if (zpNumber) return await fetchZhaopinDetail(zpNumber);
+            } else if (platformName === '前程无忧') {
+                const url = extract51jobUrl(jobEl);
+                if (url) return await fetch51jobDetail(url);
+            }
+        } catch (e) { /* 获取详情失败不影响主流程 */ }
+        return null;
     }
 
     function testBackendConnection(url, cb) {
@@ -489,6 +745,26 @@
         return null;
     }
 
+    // 清理职位描述文本，去除常见的UI元素和无关文字
+    function cleanDescription(text) {
+        if (!text) return '';
+        // 去除常见UI元素
+        const uiPatterns = [
+            /去聊聊/g, /微信扫码与我聊聊吧/g, /投递/g, /收藏/g,
+            /在线\s*\d*分钟前回复/g, /今日回复\d+次/g,
+            /刚刚活跃/g, /\d+分钟前活跃/g, /\d+小时前活跃/g,
+            /去APP沟通/g, /立即沟通/g, /查看详情/g,
+            /微信扫码/g, /扫码投递/g, /一键投递/g,
+        ];
+        let cleaned = text;
+        for (const pattern of uiPatterns) {
+            cleaned = cleaned.replace(pattern, '');
+        }
+        // 去除多余空白
+        cleaned = cleaned.replace(/\s+/g, ' ').trim();
+        return cleaned;
+    }
+
     // ---- 黑名单 / 红旗关键词 ----
     function isBlacklisted(name, company, fullText) {
         const hay = `${name} ${company} ${fullText}`;
@@ -504,10 +780,41 @@
     function parseSalary(text) {
         if (!text) return null;
         if (text.includes('面议')) return { negotiable: true };
-        const m = text.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*[Kk]/);
-        if (m) return { low: parseFloat(m[1]) * 1000, high: parseFloat(m[2]) * 1000, negotiable: false };
-        const m2 = text.match(/(\d{4,6})\s*[-~到至]\s*(\d{4,6})/);
-        if (m2) return { low: parseInt(m2[1]), high: parseInt(m2[2]), negotiable: false };
+
+        // 优先匹配 "X-Y万" 或 "X-Y千" 格式（如 "8千-1.2万", "1-1.6万", "1.5-2.5万"）
+        const mWan = text.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*万/);
+        if (mWan) {
+            const low = parseFloat(mWan[1]);
+            const high = parseFloat(mWan[2]);
+            // 判断是"千"还是"万"：如果第一个数小于10且文本中有"千"，则是千
+            const hasQian = text.includes('千');
+            if (hasQian && low < 10) {
+                return { low: Math.round(low * 1000), high: Math.round(high * 10000), negotiable: false };
+            }
+            return { low: Math.round(low * 10000), high: Math.round(high * 10000), negotiable: false };
+        }
+
+        // 匹配 "X-Y千" 格式
+        const mQian = text.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*千/);
+        if (mQian) {
+            return { low: Math.round(parseFloat(mQian[1]) * 1000), high: Math.round(parseFloat(mQian[2]) * 1000), negotiable: false };
+        }
+
+        // 匹配 "X-YK" 格式（如 "8-12K", "8.5-12.5K"）
+        const mK = text.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*[Kk]/);
+        if (mK) return { low: Math.round(parseFloat(mK[1]) * 1000), high: Math.round(parseFloat(mK[2]) * 1000), negotiable: false };
+
+        // 匹配纯数字格式 "8000-12000"（要求是合理的薪资范围，排除公司人数等）
+        const mNum = text.match(/(\d{4,6})\s*[-~到至]\s*(\d{4,6})/);
+        if (mNum) {
+            const low = parseInt(mNum[1]);
+            const high = parseInt(mNum[2]);
+            // 合理薪资范围：最低不低于2000，最高不超过100万
+            if (low >= 2000 && high <= 1000000 && high > low) {
+                return { low, high, negotiable: false };
+            }
+        }
+
         return null;
     }
     function salaryOk(text) {
@@ -817,7 +1124,20 @@
                         }
                         saveAppliedRecord(jobInfo.name, jobInfo.company, match.score, match.matched);
                         recordHistory(match.score);
-                        pushToBackend({ name: jobInfo.name, company: jobInfo.company, score: match.score, matched: match.matched, city: jobInfo.city, salary: jobInfo.salary, experience: jobInfo.experience }, this.name);
+                        // 尝试通过平台详情 API 获取完整职位描述和薪资
+                        let detailDesc = cleanDescription(jobInfo.fullText);
+                        let detailSalary = jobInfo.salary;
+                        let detailExperience = jobInfo.experience;
+                        const detail = await fetchJobDetail(this.name, jobEl, jobInfo);
+                        if (detail) {
+                            if (detail.description) detailDesc = detail.description;
+                            if (detail.salary) detailSalary = detail.salary;
+                            if (detail.workingExp) detailExperience = detail.workingExp;
+                            console.log(`🤖 [${this.name}] 详情提取成功:`, { descLen: detailDesc.length, salary: detailSalary, exp: detailExperience });
+                        } else {
+                            console.warn(`🤖 [${this.name}] 详情提取失败，使用卡片文本作为描述`);
+                        }
+                        pushToBackend({ name: jobInfo.name, company: jobInfo.company, score: match.score, matched: match.matched, city: jobInfo.city, salary: detailSalary, experience: detailExperience, description: detailDesc }, this.name);
                         this.completed++;
                         incrementDaily();
                         this.lastScores.push(match.score);
@@ -1194,7 +1514,7 @@
                     this.lastScores.push(match.score);
                     saveAppliedRecord(name, company, match.score, match.matched);
                     recordHistory(match.score);
-                    pushToBackend({ name, company, score: match.score, matched: match.matched, city: jobLocation, salary, experience }, this.name);
+                    pushToBackend({ name, company, score: match.score, matched: match.matched, city: jobLocation, salary, experience, description: cleanDescription(fullText) }, this.name);
                     saveRunState(this.name, this.target, this.completed);
                     this.addLog(`✅ [${this.completed}/${this.target}] ${name} (${match.score}%)`, 'success');
                     beep(880, 100);
@@ -1769,7 +2089,7 @@
         observer.observe(document.body, { childList: true, subtree: true });
 
         setTimeout(() => processJobCards(false), 1000);
-        console.log('🤖 自动投递助手 v7.0 已启动');
+        console.log('🤖 自动投递助手 v7.1 已启动');
         console.log(`📍 ${CONFIG.city} · 🎯 每日上限 ${CONFIG.dailyLimit} · 今日已投 ${getDailyStats().count}`);
         console.log('快捷键: Alt+S 启动/停止 · 面板 📊 查看统计 · ⚙️ 修改设置');
     }

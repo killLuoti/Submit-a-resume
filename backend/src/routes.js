@@ -32,12 +32,15 @@ router.get('/applications', asyncHandler(async (req, res) => {
 
 // 服务端直出 CSV，方便命令行 curl 下载，或不想跑前端 JS 时也能拿到导出文件。
 // 注意：路由要放在 '/applications/:id' 之前，否则 'export.csv' 会被误当成 :id 参数匹配掉。
+// filename 需要 RFC 5987 编码，否则中文字符会导致 ERR_INVALID_CHAR。
 router.get('/applications/export.csv', asyncHandler(async (req, res) => {
     const { platform, minScore, q, status } = req.query;
     const { items } = db.queryApplications({ platform, minScore, q, status, limit: 100000, offset: 0 });
     const csv = db.toCsv(items);
+    const date = new Date().toISOString().slice(0, 10);
+    const encoded = encodeURIComponent(`投递记录_${date}.csv`);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="投递记录_${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encoded}`);
     res.send(csv);
 }));
 
@@ -46,8 +49,10 @@ router.get('/applications/export.json', asyncHandler(async (req, res) => {
     const { platform, minScore, q, status } = req.query;
     const { items } = db.queryApplications({ platform, minScore, q, status, limit: 100000, offset: 0 });
     const json = db.toJson(items);
+    const date = new Date().toISOString().slice(0, 10);
+    const encoded = encodeURIComponent(`投递记录_${date}.json`);
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="投递记录_${new Date().toISOString().slice(0, 10)}.json"`);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encoded}`);
     res.send(json);
 }));
 
@@ -73,7 +78,7 @@ router.post('/applications/import', asyncHandler(async (req, res) => {
 }));
 
 router.post('/applications', asyncHandler(async (req, res) => {
-    const { name, company, score, matched, platform, salary, experience, city, time } = req.body || {};
+    const { name, company, score, matched, platform, salary, experience, city, time, description } = req.body || {};
     if (!name || typeof name !== 'string' || !name.trim()) {
         return res.status(400).json({ error: '缺少岗位名称 name', code: 'MISSING_NAME' });
     }
@@ -90,9 +95,10 @@ router.post('/applications', asyncHandler(async (req, res) => {
         score: validatedScore,
         matched: validatedMatched,
         platform: (platform || '手动录入').trim(),
-        salary: (salary || '').trim(),
-        experience: (experience || '').trim(),
-        city: (city || '').trim(),
+        salary: String(salary || '').trim(),
+        experience: String(experience || '').trim(),
+        city: String(city || '').trim(),
+        description: String(description || '').trim().slice(0, 2000),
         time: validatedTime,
     });
     if (created) getBroadcast(req)('data:create', { record });

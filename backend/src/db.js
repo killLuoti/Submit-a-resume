@@ -125,6 +125,7 @@ function addApplication(record) {
             salary: record.salary || '',
             experience: record.experience || '',
             city: record.city || '',
+            description: (record.description || '').slice(0, 2000),
             time: record.time || new Date().toISOString(),
             status: STAGE_ORDER[0],       // 默认"已投递"
             stageReached: STAGE_ORDER[0], // 曾到达过的最远阶段，初始与 status 一致
@@ -143,7 +144,7 @@ function updateApplication(id, patch) {
         if (idx === -1) return null;
 
         // 只允许更新这几个字段，防止调用方顺手改掉 id/time 等不该动的字段
-        const allowed = ['name', 'company', 'score', 'matched', 'platform', 'salary', 'experience', 'city', 'status'];
+        const allowed = ['name', 'company', 'score', 'matched', 'platform', 'salary', 'experience', 'city', 'status', 'description'];
         const updated = { ...list[idx] };
         for (const key of allowed) {
             if (patch[key] === undefined) continue;
