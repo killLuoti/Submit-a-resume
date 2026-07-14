@@ -43,13 +43,109 @@ node server.js
 
 浏览器打开这个地址即可看到管理面板：总览统计（趋势图、平台分布、技能频率）、投递记录（搜索/筛选/编辑/删除/导出CSV）、投递策略配置。
 
+---
+
+## 🚀 部署到 Linux 服务器（内网/云服务器通用）
+
+### 1. 上传代码到服务器
+
+```bash
+# 将整个 backend/ 目录上传到服务器，例如：
+scp -r backend/ user@192.168.x.x:/opt/job-helper/
+```
+
+### 2. 安装 Node.js（如未安装）
+
+```bash
+# Ubuntu/Debian
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# CentOS/RHEL
+curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+sudo yum install -y nodejs
+
+# 验证
+node -v   # 应 >= 18
+npm -v
+```
+
+### 3. 安装依赖
+
+```bash
+cd /opt/job-helper/backend
+npm install --production
+```
+
+### 4. 安装 PM2（进程守护）
+
+```bash
+sudo npm install -g pm2
+```
+
+### 5. 启动应用
+
+```bash
+# 使用 PM2 启动
+pm2 start ecosystem.config.js
+
+# 查看状态
+pm2 status
+
+# 查看日志
+pm2 logs job-helper
+```
+
+### 6. 设置开机自启
+
+```bash
+pm2 startup
+# 按提示执行输出的 sudo 命令
+pm2 save
+```
+
+### 7. 开放防火墙端口
+
+```bash
+# Ubuntu (ufw)
+sudo ufw allow 8787/tcp
+
+# CentOS (firewalld)
+sudo firewall-cmd --permanent --add-port=8787/tcp
+sudo firewall-cmd --reload
+```
+
+### 8. 验证部署
+
+浏览器访问 `http://<服务器IP>:8787`，应该能看到管理后台页面。
+
+### PM2 常用命令
+
+| 命令 | 说明 |
+|------|------|
+| `pm2 status` | 查看所有进程状态 |
+| `pm2 logs job-helper` | 查看实时日志 |
+| `pm2 restart job-helper` | 重启应用 |
+| `pm2 stop job-helper` | 停止应用 |
+| `pm2 delete job-helper` | 删除应用 |
+
+### 修改端口
+
+如需修改端口，编辑 `ecosystem.config.js` 中的 `PORT` 环境变量，然后重启：
+
+```bash
+pm2 restart job-helper
+```
+
+---
+
 ## 让油猴脚本把数据同步过来
 
 1. 先确保后台已启动（上面的 `node server.js`）。
 2. 打开智联招聘/Boss直聘等页面，点击脚本面板右上角 **⚙️ 设置**。
 3. 找到「管理后台同步」区块：
    - 勾选「投递成功后同步记录到本地管理后台」
-   - 后台地址默认是 `http://127.0.0.1:8787/api`，如果你改了端口需要同步修改
+   - 后台地址默认是 `http://127.0.0.1:8787/api`，如果部署到了内网服务器，需要改为 `http://<服务器IP>:8787/api`
    - 点「测试连接」确认能连通
 4. 保存设置。之后每次自动投递成功，都会把岗位名、公司、匹配度、匹配技能等同步一条记录到后台。
 
