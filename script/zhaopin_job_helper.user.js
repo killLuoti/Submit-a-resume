@@ -1,10 +1,11 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         智联招聘/Boss直聘/前程无忧/猎聘 - 智能自动投递助手 v7.0
 // @namespace    http://tampermonkey.net/
-// @version      7.2
+// @version      7.5
 // @description  多平台自动投递，技能匹配度分析，经验/薪资/红旗关键词过滤，投递统计图表，断点续投，稳定性优化，可选同步到本地管理后台（智联/前程无忧新增详情API获取完整职位描述和薪资）
 // @connect      127.0.0.1
 // @connect      localhost
+// @connect      192.168.50.250
 // @connect      fe-api.zhaopin.com
 // @connect      jobs.51job.com
 // @author       罗启盛求职助手
@@ -37,7 +38,7 @@
         blacklistKeywords: ['外包', '劳务派遣', '中介', '兼职', '实习', '助理'],
         blacklistCompanies: [],
         negativeSignals: ['日结', '刷单', '押金', '培训费', '中介费', '有偿内推', '入职费'],
-        expectedSalary: [3000, 12000],
+        expectedSalary: [2500, 12000],
         skipIfSalaryUnknown: true,
 
         myYearsExperience: 4,       // 你的工作年限，用于经验要求过滤
@@ -57,7 +58,7 @@
 
         // 可选：同步投递记录到本地管理后台（见 backend/ 目录），默认关闭
         syncEnabled: false,
-        backendUrl: 'http://127.0.0.1:8787/api',
+        backendUrl: 'http://192.168.50.250:8787/api',
 
         greetingTemplate: '您好，我有4年IT运维与技术支持经验，熟悉桌面运维、网络管理、系统维护及物联网相关技术，看到贵司该岗位与我的经验较为匹配，希望能进一步沟通，期待您的回复！',
 
@@ -406,19 +407,16 @@
         return null;
     }
 
-    // 从前程无忧岗位卡片中提取详情页链接
-    // 标题链接 href 格式：/foshan-sdq/172361885.html 或 https://jobs.51job.com/foshan-sdq/172361885.html
+    // 从前程无忧岗位卡片中提取标题详情页链接。
+    // 必须只取标题链接；卡片内还可能有公司/推广链接，不能以“第一个含数字的 html”作为详情页。
     function extract51jobUrl(jobEl) {
         try {
-            const links = jobEl.querySelectorAll('a[href*="51job.com"], a[href*="/"]');
+            const links = jobEl.querySelectorAll('.jname a[href], a.jname[href], [class*="job-title"] a[href], a[title][href]');
             for (const a of links) {
                 const href = a.getAttribute('href') || '';
-                // 匹配岗位详情页链接（含数字 ID 的 .html）
-                if (/\d+\.html/.test(href)) {
-                    if (href.startsWith('http')) return href;
-                    if (href.startsWith('//')) return 'https:' + href;
-                    return 'https://jobs.51job.com' + href;
-                }
+                const url = new URL(href, 'https://jobs.51job.com');
+                // 标准职位详情路径：/{城市或区域}/{职位数字 ID}.html
+                if (url.hostname === 'jobs.51job.com' && /^\/[^/]+\/\d+\.html$/.test(url.pathname)) return url.href;
             }
         } catch (e) {}
         return null;
@@ -564,7 +562,8 @@
                 const zpNumber = extractZhaopinNumber(jobEl);
                 if (zpNumber) return await fetchZhaopinDetail(zpNumber);
             } else if (platformName === '前程无忧') {
-                const url = extract51jobUrl(jobEl);
+                // 点击申请后卡片可能被框架重绘，因此优先使用解析卡片时缓存的标题链接。
+                const url = jobInfo.detailUrl || extract51jobUrl(jobEl);
                 if (url) return await fetch51jobDetail(url);
             }
         } catch (e) { /* 获取详情失败不影响主流程 */ }
@@ -748,20 +747,85 @@
     // 清理职位描述文本，去除常见的UI元素和无关文字
     function cleanDescription(text) {
         if (!text) return '';
-        // 去除常见UI元素
+        let cleaned = text;
+
+        // ============================================================
+        // 1. 去除 Boss 直聘反爬 CSS 样式代码块
+        //    格式如: .NzDzdFFFMJ{display:inline-block;font-size:0!important;...}
+        // ============================================================
+        cleaned = cleaned.replace(/\.[A-Za-z][\w-]*\s*\{[^}]*\}/g, '');
+
+        // ============================================================
+        // 2. 去除 Boss 直聘在职位描述中随机插入的隐藏文字标记
+        //    注意清理顺序：先处理复合短语，再处理单词，避免残留碎片
+        // ============================================================
+        // 2a. "来自BOSS直聘" 整体去除（否则拆开后 "来自" 会残留）
+        cleaned = cleaned.replace(/来自BOSS直聘/g, '');
+        // 2b. "BOSS直聘" 整体去除
+        cleaned = cleaned.replace(/BOSS直聘/g, '');
+        // 2c. 残留的独立 "直聘"（被夹在中文字符间的反爬标记）
+        cleaned = cleaned.replace(/(?<=[\u4e00-\u9fff\u3000-\u303F])直聘(?=[\u4e00-\u9fff\u3000-\u303F])/g, '');
+        // 2d. "kanzhun" 反爬标记
+        cleaned = cleaned.replace(/kanzhun/g, '');
+        // 2e. "boss" 小写反爬标记 —— 扩展边界到中文标点（如 、。，）
+        //     避免把 "Spring Boot" 中的 "Boot" 误伤
+        cleaned = cleaned.replace(/(?<=[\u4e00-\u9fff\u3000-\u303F\d])boss(?=[\u4e00-\u9fff\u3000-\u303F\d])/gi, '');
+
+        // ============================================================
+        // 3. 去除 Boss 直聘详情页底部无关 UI 文本块
+        //    注意：BOSS 可能已被步骤2清除，所以匹配要宽松（.{0,10}）
+        // ============================================================
+        const bossTailPatterns = [
+            /去App与.{0,10}随时沟通[\s\S]*$/,
+            /前往App与.{0,10}随时沟通[\s\S]*$/,
+            /工作地址[\s\S]*$/,
+            /点击查看地图[\s\S]*$/,
+            /查看更多信息[\s\S]*$/,
+            /求职工具[\s\S]*$/,
+            /热门职位[\s\S]*$/,
+            /热门城市[\s\S]*$/,
+            /附近城市[\s\S]*$/,
+            /升级VIP[\s\S]*$/,
+            /去升级[\s\S]*$/,
+        ];
+        for (const pattern of bossTailPatterns) {
+            const match = cleaned.match(pattern);
+            if (match && match.index !== undefined) {
+                // 只有当匹配位置在文本后半段时才截断（保留正文部分）
+                if (match.index > cleaned.length * 0.35) {
+                    cleaned = cleaned.substring(0, match.index);
+                }
+            }
+        }
+
+        // ============================================================
+        // 4. 去除常见UI元素
+        // ============================================================
         const uiPatterns = [
-            /去聊聊/g, /微信扫码与我聊聊吧/g, /投递/g, /收藏/g,
+            /举报/g, /分享/g, /不合适/g, /收藏/g,
+            /去聊聊/g, /微信扫码与我聊聊吧/g,
             /在线\s*\d*分钟前回复/g, /今日回复\d+次/g,
             /刚刚活跃/g, /\d+分钟前活跃/g, /\d+小时前活跃/g,
             /去APP沟通/g, /立即沟通/g, /查看详情/g,
             /微信扫码/g, /扫码投递/g, /一键投递/g,
+            /投递/g,
+            /前往APP查看/g,
         ];
-        let cleaned = text;
         for (const pattern of uiPatterns) {
             cleaned = cleaned.replace(pattern, '');
         }
-        // 去除多余空白
-        cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
+        // ============================================================
+        // 5. 去除 Boss 直聘加密薪资遗留的私有区 Unicode 字符
+        //    （E000-F8FF 私有区，Boss 用来显示被加密的薪资数字）
+        // ============================================================
+        cleaned = cleaned.replace(/[\uE000-\uF8FF]+/g, '');
+
+        // 去除多余空白，合并为规范文本
+        cleaned = cleaned.replace(/[ \t]+/g, ' ');
+        cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+        cleaned = cleaned.trim();
+
         return cleaned;
     }
 
@@ -779,18 +843,21 @@
     // ---- 薪资解析 ----
     function parseSalary(text) {
         if (!text) return null;
+        // 统一常见的全角符号，避免不同平台的排版导致正则漏匹配。
+        text = String(text).replace(/，/g, ',').replace(/～/g, '~');
         if (text.includes('面议')) return { negotiable: true };
 
-        // 优先匹配 "X-Y万" 或 "X-Y千" 格式（如 "8千-1.2万", "1-1.6万", "1.5-2.5万"）
+        // 混合单位："8千-1.2万"、"1万-8千"。这类写法在招聘卡片中很常见。
+        let m = text.match(/(\d+(?:\.\d+)?)\s*千\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*万/);
+        if (m) return { low: Math.round(parseFloat(m[1]) * 1000), high: Math.round(parseFloat(m[2]) * 10000), negotiable: false };
+        m = text.match(/(\d+(?:\.\d+)?)\s*万\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*千/);
+        if (m) return { low: Math.round(parseFloat(m[2]) * 1000), high: Math.round(parseFloat(m[1]) * 10000), negotiable: false };
+
+        // 匹配同单位的 "X-Y万" 格式。
         const mWan = text.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*万/);
         if (mWan) {
             const low = parseFloat(mWan[1]);
             const high = parseFloat(mWan[2]);
-            // 判断是"千"还是"万"：如果第一个数小于10且文本中有"千"，则是千
-            const hasQian = text.includes('千');
-            if (hasQian && low < 10) {
-                return { low: Math.round(low * 1000), high: Math.round(high * 10000), negotiable: false };
-            }
             return { low: Math.round(low * 10000), high: Math.round(high * 10000), negotiable: false };
         }
 
@@ -822,6 +889,26 @@
         if (!sal) return !CONFIG.skipIfSalaryUnknown;
         if (sal.negotiable) return !CONFIG.skipIfSalaryUnknown;
         return sal.high >= CONFIG.expectedSalary[0] && sal.low <= CONFIG.expectedSalary[1] * 1.5;
+    }
+    // Boss 卡片薪资常以私有区字符配合网页字体显示。textContent 只能拿到加密字符，
+    // 不能交给通用薪资解析器，否则会在“未知薪资跳过”开启时造成误拦截。
+    function hasBossObfuscatedSalary(text) {
+        return /[\uE000-\uF8FF]/.test(String(text || '')) && /(?:[Kk]|千|万)/.test(String(text || ''));
+    }
+
+    function normalizeMatchText(text) {
+        return String(text || '')
+            .toLowerCase()
+            .replace(/[\s\u3000\-_\/|｜·•()（）\[\]【】]/g, '');
+    }
+    function containsKeyword(text, keyword) {
+        const normalizedKeyword = normalizeMatchText(keyword);
+        return Boolean(normalizedKeyword) && normalizeMatchText(text).includes(normalizedKeyword);
+    }
+    function getKeywordMatch(name, fullText) {
+        const titleMatches = CONFIG.jobKeywords.filter(k => containsKeyword(name, k));
+        const textMatches = titleMatches.length ? titleMatches : CONFIG.jobKeywords.filter(k => containsKeyword(fullText, k));
+        return { matched: textMatches, titleMatched: titleMatches.length > 0 };
     }
 
     // ---- 经验要求解析 ----
@@ -885,18 +972,66 @@
     }
 
     // ---- 统一的岗位合规性判断（供所有平台引擎复用）----
-    function evaluateJob(name, company, fullText, cityText) {
+    function evaluateJob(name, company, fullText, cityText, options = {}) {
         if (!name) return { ok: false, reason: '解析失败' };
         if (isApplied(name, company)) return { ok: false, reason: '已投递过', skipType: 'applied' };
         if (remainingToday() <= 0) return { ok: false, reason: '今日限额已用完', hitLimit: true };
         if (isBlacklisted(name, company, fullText)) return { ok: false, reason: '命中黑名单', skipType: 'blacklist' };
         if (hasNegativeSignal(fullText)) return { ok: false, reason: '命中风险关键词', skipType: 'blacklist' };
         if (CONFIG.city && cityText && !cityText.includes(CONFIG.city)) return { ok: false, reason: `城市不匹配: ${cityText}` };
-        const hasKeyword = CONFIG.jobKeywords.some(k => name.includes(k) || fullText.includes(k));
-        if (!hasKeyword) return { ok: false, reason: '岗位不匹配' };
-        if (!salaryOk(fullText)) return { ok: false, reason: '薪资不合适' };
+        const keywordMatch = getKeywordMatch(name, fullText);
+        if (!keywordMatch.matched.length) return { ok: false, reason: '岗位不匹配' };
+        const salarySource = options.salaryText || fullText;
+        const salaryIsObfuscated = options.allowObfuscatedSalary && hasBossObfuscatedSalary(salarySource);
+        if (!salaryIsObfuscated && !salaryOk(salarySource)) return { ok: false, reason: '薪资不合适' };
         if (!experienceOk(fullText)) return { ok: false, reason: '经验要求过高' };
-        return { ok: true };
+        return { ok: true, keywordMatch, salaryIsObfuscated };
+    }
+
+    // 职位名称是最可靠的信号：名称命中优先于仅在卡片正文命中，之后再比较技能匹配度。
+    // 调用处以原始列表序号作最终排序键，避免同分岗位在不同浏览器中频繁变动。
+    function getJobPriority(name, fullText, match) {
+        const keywordMatch = getKeywordMatch(name, fullText);
+        return {
+            titleKeyword: keywordMatch.titleMatched ? 1 : 0,
+            keywordCount: keywordMatch.matched.length,
+            skillScore: match.score,
+        };
+    }
+
+    function getVisibleText(root, selectors) {
+        if (!root) return '';
+        for (const selector of selectors) {
+            const el = root.querySelector(selector);
+            if (el && el.offsetParent !== null) {
+                const text = (el.textContent || '').trim();
+                if (text) return text;
+            }
+        }
+        return '';
+    }
+
+    // Boss 的详情是点击列表卡片后在右侧动态渲染的；列表卡片只含摘要，不能作为投递记录。
+    function getBossDetailInfo(card) {
+        const roots = Array.from(document.querySelectorAll(
+            '.job-detail-box, .job-detail, [class*="job-detail"], [class*="jobDetail"]'
+        )).filter(el => el.offsetParent !== null);
+        // 优先选择包含岗位描述区的详情容器，避免选到同名的布局容器。
+        const detailRoot = roots.find(el => el.querySelector('.job-sec-text, .job-sec .text, [class*="job-description"], [class*="job-desc"]')) || roots[0] || card;
+        const name = getVisibleText(detailRoot, ['.job-name', '.job-title', '.name h1', 'h1']) ||
+            getVisibleText(card, ['.job-name', '.job-title', 'h3']);
+        const company = getVisibleText(detailRoot, [
+            '.company-name', '.company-name a', '.company-info a', '[class*="company-name"]', '[class*="companyName"]'
+        ]) || getVisibleText(card, ['.company-name', '[class*="company-name"]']);
+        const salaryText = getVisibleText(detailRoot, ['.job-salary', '.salary', '[class*="job-salary"]', '[class*="salary"]']) ||
+            getVisibleText(card, ['.job-salary', '.salary', '[class*="salary"]']);
+        const description = getVisibleText(detailRoot, [
+            '.job-sec-text', '.job-sec .text', '.job-detail-content', '[class*="job-description"]', '[class*="job-desc"]'
+        ]);
+        const location = getVisibleText(detailRoot, ['.job-location', '.job-area', '[class*="job-location"]', '[class*="job-area"]']) ||
+            getVisibleText(card, ['.company-location', '[class*="job-location"]']);
+        const detailText = (description || detailRoot.textContent || '').trim();
+        return { name, company, salaryText, description, location, detailText };
     }
 
     // ---- CSV 导出 ----
@@ -1041,6 +1176,7 @@
                     fullText,
                     salary: parseSalary(fullText),
                     experience: parseExperienceRequirement(fullText),
+                    detailUrl: site.name === '前程无忧' ? extract51jobUrl(jobEl) : '',
                     applyBtn,
                 };
             },
@@ -1328,7 +1464,8 @@
                 this.logs = [];
                 this.lastScores = [];
                 this.lastProgressTime = Date.now();
-                const runStartTime = Date.now();
+
+                updateUI(this);
 
                 // 检测是否在岗位搜索结果页（而不是详情页）
                 const jobs = this.getJobs();
@@ -1350,7 +1487,7 @@
                         break;
                     }
                     // 稳定性看门狗：跑了一段时间仍然 0 投递，大概率是该页面选择器不匹配
-                    if (this.completed === 0 && Date.now() - runStartTime > CONFIG.watchdogNoProgressMs) {
+                    if (this.completed === 0 && Date.now() - this.lastProgressTime > CONFIG.watchdogNoProgressMs) {
                         this.addLog('⏱ 长时间无成功投递，可能是页面结构与选择器不匹配，已自动停止', 'error');
                         toast('长时间无进展，已自动停止（请检查选择器）', 'error', 4000);
                         break;
@@ -1361,11 +1498,17 @@
                     this.addLog(`📋 本页找到 ${jobs.length} 个岗位，按匹配度排序后投递`, 'info');
 
                     // 预先计算匹配度并按分数从高到低排序，优先投递高匹配岗位
-                    const infos = jobs.map(el => {
+                    const infos = jobs.map((el, index) => {
                         const info = this.getJobInfo(el);
-                        return { el, info, match: calcMatch(info.fullText) };
+                        const match = calcMatch(info.fullText);
+                        return { el, info, match, priority: getJobPriority(info.name, info.fullText, match), index };
                     }).filter(x => x.info.name);
-                    infos.sort((a, b) => b.match.score - a.match.score);
+                    infos.sort((a, b) =>
+                        b.priority.titleKeyword - a.priority.titleKeyword ||
+                        b.priority.keywordCount - a.priority.keywordCount ||
+                        b.priority.skillScore - a.priority.skillScore ||
+                        a.index - b.index
+                    );
 
                     for (const { el, info, match } of infos) {
                         if (!this.running || this.completed >= this.target || remainingToday() <= 0) break;
@@ -1409,7 +1552,7 @@
                 updateUI(this);
             },
 
-            stop() { this.running = false; this.addLog('⏸ 已手动暂停', 'info'); },
+            stop() { this.running = false; this.addLog('⏸ 已手动暂停', 'info'); updateUI(this); },
             addLog(msg, type = 'info') { this.logs.push({ msg, type, time: new Date().toLocaleTimeString() }); renderLogs(this); }
         };
     }
@@ -1428,6 +1571,7 @@
         target: 50,
         logs: [],
         lastScores: [],
+        lastProgressTime: 0,
 
         async run(targetCount, resumeCompleted) {
             this.running = true;
@@ -1435,7 +1579,9 @@
             this.target = targetCount || CONFIG.deliverCount;
             this.logs = [];
             this.lastScores = [];
-            const runStartTime = Date.now();
+            this.lastProgressTime = Date.now();
+
+            updateUI(this);
 
             this.addLog('🚀 Boss直聘模式启动', 'info');
             this.addLog(`📅 今日剩余额度: ${remainingToday()} / ${CONFIG.dailyLimit}`, 'info');
@@ -1458,33 +1604,45 @@
                     toast('今日限额已用完', 'error', 3000);
                     break;
                 }
-                if (this.completed === 0 && Date.now() - runStartTime > CONFIG.watchdogNoProgressMs) {
+                if (this.completed === 0 && Date.now() - this.lastProgressTime > CONFIG.watchdogNoProgressMs) {
                     this.addLog('⏱ 长时间无成功沟通，可能是页面结构变化，已自动停止', 'error');
                     break;
                 }
 
                 const jobs = document.querySelectorAll('.job-list-container .job-card-box');
                 if (jobs.length === 0) { this.addLog('⚠ 未找到岗位卡片', 'error'); break; }
-                this.addLog(`📋 本页 ${jobs.length} 个岗位`, 'info');
+                // 过滤掉上一轮已经处理过的卡片（Boss 直聘无限滚动会重新加载全部卡片）
+                const newJobs = Array.from(jobs).filter(j => j.dataset.zpmProcessed !== '1');
+                if (newJobs.length === 0) { this.addLog('📋 本页无新岗位', 'info'); }
+                else { this.addLog(`📋 本页 ${jobs.length} 个岗位（${newJobs.length} 个新）`, 'info'); }
 
-                for (const job of jobs) {
+                for (const job of newJobs) {
                     if (!this.running || this.completed >= this.target || remainingToday() <= 0) break;
 
                     job.click();
                     await delay(jitter(1500));
 
-                    const name = job.querySelector('.job-name')?.textContent?.trim() || '';
-                    const company = job.querySelector('[class*="company-name"]')?.textContent?.trim() || '';
-                    const jobLocation = job.querySelector('.company-location')?.textContent?.trim() || '';
-                    const fullText = job.textContent || '';
-                    const salary = parseSalary(fullText);
+                    const detail = getBossDetailInfo(job);
+                    const name = detail.name || job.querySelector('.job-name')?.textContent?.trim() || '';
+                    const company = detail.company;
+                    const jobLocation = detail.location || job.querySelector('.company-location')?.textContent?.trim() || '';
+                    // 筛选使用详情描述；若详情未加载才回退到列表卡片。
+                    const fullText = detail.detailText || job.textContent || '';
+                    const salaryText = detail.salaryText || fullText;
+                    const salary = parseSalary(salaryText);
                     const experience = parseExperienceRequirement(fullText);
-                    const match = calcMatch(fullText);
+                    const match = calcMatch(`${name}\n${fullText}`);
 
                     const advance = () => { scrollTop += 80; window.scrollTo({ top: scrollTop, behavior: 'smooth' }); return delay(jitter(1000)); };
 
-                    const verdict = evaluateJob(name, company, fullText, jobLocation);
+                    // 标记卡片已处理，防止滚动加载后重复遍历
+                    job.dataset.zpmProcessed = '1';
+
+                    const verdict = evaluateJob(name, company, fullText, jobLocation, { allowObfuscatedSalary: true, salaryText });
                     if (!verdict.ok) { this.addLog(`⏭ ${name} - ${verdict.reason}`, 'skip'); await advance(); continue; }
+                    if (verdict.salaryIsObfuscated) {
+                        this.addLog(`ℹ ${name} - Boss 薪资为加密字体，保留该岗位供沟通`, 'info');
+                    }
 
                     const chatBtn = document.querySelector('a.op-btn.op-btn-chat');
                     if (!chatBtn || !chatBtn.textContent.includes('立即沟通')) { this.addLog(`⏭ ${name} - 无立即沟通按钮`, 'skip'); await advance(); continue; }
@@ -1514,7 +1672,17 @@
                     this.lastScores.push(match.score);
                     saveAppliedRecord(name, company, match.score, match.matched);
                     recordHistory(match.score);
-                    pushToBackend({ name, company, score: match.score, matched: match.matched, city: jobLocation, salary, experience, description: cleanDescription(fullText) }, this.name);
+                    pushToBackend({
+                        name,
+                        company,
+                        score: match.score,
+                        matched: match.matched,
+                        city: jobLocation,
+                        // 无法解码时仍保存原始薪资文本，避免把有薪资的 Boss 岗位记录为“空”。
+                        salary: salary || salaryText,
+                        experience,
+                        description: cleanDescription(detail.description || fullText),
+                    }, this.name);
                     saveRunState(this.name, this.target, this.completed);
                     this.addLog(`✅ [${this.completed}/${this.target}] ${name} (${match.score}%)`, 'success');
                     beep(880, 100);
@@ -1546,7 +1714,7 @@
             updateUI(this);
         },
 
-        stop() { this.running = false; this.addLog('⏸ 已手动暂停', 'info'); },
+        stop() { this.running = false; this.addLog('⏸ 已手动暂停', 'info'); updateUI(this); },
         addLog(msg, type = 'info') { this.logs.push({ msg, type, time: new Date().toLocaleTimeString() }); renderLogs(this); }
     };
 
@@ -1688,9 +1856,6 @@
                 await eng.run(CONFIG.deliverCount);
             } else {
                 eng.stop();
-                const t = document.getElementById('zpm-v5-toggle');
-                t.textContent = '🚀 启动自动投递';
-                t.className = 'zpm-toggle-btn start';
             }
         };
 
