@@ -48,6 +48,7 @@
         dailyLimit: 20,
         batchInterval: 4000,
         jitterPercent: 30,           // 延时随机浮动百分比，让节奏更平稳，减少页面卡顿/误触发
+        skillMatchBypassThreshold: 10, // 技能匹配度 >= 此值时，即使岗位名不匹配关键词也作为"次选"投递（0=禁用）
         watchdogNoProgressMs: 120000, // 运行N毫秒仍0投递则自动停止（多半是选择器不匹配该页面）
         autoNextPage: true,
         retryOnFail: true,
@@ -980,22 +981,31 @@
         if (hasNegativeSignal(fullText)) return { ok: false, reason: '命中风险关键词', skipType: 'blacklist' };
         if (CONFIG.city && cityText && !cityText.includes(CONFIG.city)) return { ok: false, reason: `城市不匹配: ${cityText}` };
         const keywordMatch = getKeywordMatch(name, fullText);
-        if (!keywordMatch.matched.length) return { ok: false, reason: '岗位不匹配' };
         const salarySource = options.salaryText || fullText;
         const salaryIsObfuscated = options.allowObfuscatedSalary && hasBossObfuscatedSalary(salarySource);
         if (!salaryIsObfuscated && !salaryOk(salarySource)) return { ok: false, reason: '薪资不合适' };
         if (!experienceOk(fullText)) return { ok: false, reason: '经验要求过高' };
+        // 关键词不匹配时，检查技能匹配度是否达到"次选"阈值
+        if (!keywordMatch.matched.length) {
+            const threshold = CONFIG.skillMatchBypassThreshold || 0;
+            if (threshold > 0 && options.skillScore >= threshold) {
+                return { ok: true, keywordMatch, salaryIsObfuscated, bypassKeyword: true };
+            }
+            return { ok: false, reason: '岗位不匹配' };
+        }
         return { ok: true, keywordMatch, salaryIsObfuscated };
     }
 
     // 职位名称是最可靠的信号：名称命中优先于仅在卡片正文命中，之后再比较技能匹配度。
+    // 绕过关键词的"次选"岗位排最后。
     // 调用处以原始列表序号作最终排序键，避免同分岗位在不同浏览器中频繁变动。
-    function getJobPriority(name, fullText, match) {
+    function getJobPriority(name, fullText, match, bypassKeyword = false) {
         const keywordMatch = getKeywordMatch(name, fullText);
         return {
             titleKeyword: keywordMatch.titleMatched ? 1 : 0,
             keywordCount: keywordMatch.matched.length,
             skillScore: match.score,
+            bypassKeyword: bypassKeyword ? 1 : 0, // 0=正常 1=次选（排最后）
         };
     }
 
@@ -1195,12 +1205,16 @@
             },
 
             async applyOne(jobEl, jobInfo, match) {
-                const verdict = evaluateJob(jobInfo.name, jobInfo.company, jobInfo.fullText, jobInfo.city);
+                const verdict = evaluateJob(jobInfo.name, jobInfo.company, jobInfo.fullText, jobInfo.city, { skillScore: match.score });
                 if (!verdict.ok) {
                     if (verdict.skipType === 'applied') jobEl.classList.add('zpm-job-applied');
                     else if (verdict.skipType === 'blacklist') jobEl.classList.add('zpm-job-blacklist');
                     else jobEl.style.opacity = '0.5';
                     return { success: false, reason: verdict.reason, hitLimit: verdict.hitLimit };
+                }
+
+                if (verdict.bypassKeyword) {
+                    this.addLog(`🔀 ${jobInfo.name} - 关键词不匹配但技能匹配度 ${match.score}% ≥ ${CONFIG.skillMatchBypassThreshold}%，作为次选投递`, 'info');
                 }
 
                 jobEl.classList.add('zpm-job-highlight');
@@ -1638,8 +1652,11 @@
                     // 标记卡片已处理，防止滚动加载后重复遍历
                     job.dataset.zpmProcessed = '1';
 
-                    const verdict = evaluateJob(name, company, fullText, jobLocation, { allowObfuscatedSalary: true, salaryText });
+                    const verdict = evaluateJob(name, company, fullText, jobLocation, { allowObfuscatedSalary: true, salaryText, skillScore: match.score });
                     if (!verdict.ok) { this.addLog(`⏭ ${name} - ${verdict.reason}`, 'skip'); await advance(); continue; }
+                    if (verdict.bypassKeyword) {
+                        this.addLog(`🔀 ${name} - 关键词不匹配但技能匹配度 ${match.score}% ≥ ${CONFIG.skillMatchBypassThreshold}%，作为次选投递`, 'info');
+                    }
                     if (verdict.salaryIsObfuscated) {
                         this.addLog(`ℹ ${name} - Boss 薪资为加密字体，保留该岗位供沟通`, 'info');
                     }
@@ -1788,6 +1805,7 @@
                     <button class="zpm-filter-btn" data-filter="gt30">&gt;30%</button>
                     <button class="zpm-filter-btn" data-filter="gt50">&gt;50%</button>
                     <button class="zpm-filter-btn" data-filter="gt70">&gt;70%</button>
+                    <button class="zpm-filter-btn" data-filter="lt10" style="background:#ff4d4f;color:#fff;border-color:#ff4d4f;">&lt;10%</button>
                     <button class="zpm-filter-btn" data-filter="salary">💰 薪资合适</button>
                 </div>
 
@@ -2033,6 +2051,13 @@
                 </div>
 
                 <div class="zpm-set-group">
+                    <label>技能匹配度绕过关键词（次选投递）</label>
+                    <div class="zpm-set-row">
+                        <div><input type="number" id="zpm-set-bypass" value="${CONFIG.skillMatchBypassThreshold}"><div class="zpm-set-hint">技能匹配度≥此值即投递，即使岗位名不匹配关键词（0=禁用）</div></div>
+                    </div>
+                </div>
+
+                <div class="zpm-set-group">
                     <label>期望薪资范围（元）</label>
                     <div class="zpm-set-row">
                         <div><input type="number" id="zpm-set-sal-low" value="${CONFIG.expectedSalary[0]}"></div>
@@ -2115,6 +2140,7 @@
                 CONFIG.negativeSignals = document.getElementById('zpm-set-neg').value.split(',').map(s => s.trim()).filter(Boolean);
                 CONFIG.myYearsExperience = parseInt(document.getElementById('zpm-set-my-years').value) || 0;
                 CONFIG.maxExperienceGap = parseInt(document.getElementById('zpm-set-gap').value) || 0;
+                CONFIG.skillMatchBypassThreshold = parseInt(document.getElementById('zpm-set-bypass').value) || 0;
                 CONFIG.expectedSalary = [
                     parseInt(document.getElementById('zpm-set-sal-low').value) || 0,
                     parseInt(document.getElementById('zpm-set-sal-high').value) || 999999,
@@ -2232,6 +2258,7 @@
             else if (state === 'gt30') show = score > 30;
             else if (state === 'gt50') show = score > 50;
             else if (state === 'gt70') show = score > 70;
+            else if (state === 'lt10') show = score > 0 && score < 10;
             else if (state === 'salary') show = salaryOk(card.textContent || '');
             card.classList.toggle('zpm-job-hidden', !show);
         });
@@ -2254,7 +2281,7 @@
         observer.observe(document.body, { childList: true, subtree: true });
 
         setTimeout(() => processJobCards(false), 1000);
-        console.log('🤖 自动投递助手 v7.1 已启动');
+        console.log('🤖 自动投递助手 已启动');
         console.log(`📍 ${CONFIG.city} · 🎯 每日上限 ${CONFIG.dailyLimit} · 今日已投 ${getDailyStats().count}`);
         console.log('快捷键: Alt+S 启动/停止 · 面板 📊 查看统计 · ⚙️ 修改设置');
     }
